@@ -115,4 +115,6 @@ MIT
 
 ---
 
-**Desarrollado por autollantabi**
+**Desarrollado por Diego Barbecho**
+**GitProfile: https://github.com/BrujoFurioso22**
+

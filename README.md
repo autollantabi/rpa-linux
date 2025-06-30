@@ -5,8 +5,11 @@ Automatización bancaria multiplataforma para Linux usando Python y Playwright.
 ## Bancos soportados
 
 - **Banco Pichincha**
+- **Banco Guayaquil**
 - **Banco Produbanco**
 - **Banco Bolivariano**
+- **Cooperativa JEP**
+- **Cooperativa CREA**
 
 ## Tecnologías utilizadas
 
@@ -16,11 +19,24 @@ Automatización bancaria multiplataforma para Linux usando Python y Playwright.
 
 ## Estructura del proyecto
 
-- `BancoPichincha_Final.py`: Automatización completa de consultas y descargas usando Playwright.
-- `BancoProdubanco_Final.py`: Automatización de operaciones bancarias y procesamiento de empresas con Playwright.
-- `CooperativaJEP_Final.py`: Automatización de operaciones bancarias y procesamiento de empresas con Playwright..
-- `CooperativaCREA_Final.py`: Automatización de operaciones bancarias y procesamiento de empresas con Playwright..
-- `BancoBolivariano_Final.py`: Código sencillo en Python que solo lee y procesa archivos TXT descargados manualmente.
+### Automatización Playwright (Navegador Virtual)
+
+- **Bancos:**
+  - `BancoPichincha_Final.py`: Automatización completa de consultas y descargas usando Playwright.
+  - `BancoProdubanco_Final.py`: Automatización de operaciones bancarias y procesamiento de empresas con Playwright.
+  - `BancoGuayaquil_Final.py`: Automatización de operaciones bancarias y procesamiento de empresas con Playwright.
+  - `BancoBolivariano_Final.py`: *Solo lee y procesa archivos TXT descargados manualmente, no usa navegador virtual.*
+
+- **Cooperativas:**
+  - `CooperativaJEP_Final.py`: Automatización de operaciones bancarias y procesamiento de empresas con Playwright.
+  - `CooperativaCREA_Final.py`: Automatización de operaciones bancarias y procesamiento de empresas con Playwright.
+
+### Bash de ejecución
+
+- `bashBolivariano.sh`, `bashGuayaquil.sh`, `bashPichincha.sh`, `bashProdubanco.sh`, `bashCREA.sh`, `bashJEP.sh`: Scripts bash para lanzar la automatización en un navegador virtual (headless) para cada banco/cooperativa. **Excepto Bolivariano**, que solo ejecuta el script Python para procesar el archivo TXT.
+
+### Componentes comunes
+
 - `componentes_comunes.py`: Funciones y clases reutilizables: logs, manejo de archivos, helpers de Playwright, etc.
 - `README.md`: Este archivo.
 

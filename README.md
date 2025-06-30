@@ -61,7 +61,7 @@ Automatización bancaria multiplataforma para Linux usando Python y Playwright.
 
 2. Instala dependencias:
    ```bash
-   pip install -r requirements.txt
+   pip install playwright pyodbc openpyxl imapclient
    playwright install
    ```
 
@@ -81,6 +81,33 @@ Automatización bancaria multiplataforma para Linux usando Python y Playwright.
 - Los scripts para Pichincha y Produbanco usan Playwright para automatizar la navegación y descarga de movimientos.
 - Los logs se guardan por banco y por ejecución en la carpeta `logs/`.
 - Personaliza las rutas y credenciales en los archivos de configuración según tu entorno.
+
+## Librerías necesarias
+
+Instala las siguientes librerías antes de ejecutar el proyecto:
+
+- playwright
+- pyodbc
+- openpyxl
+- imapclient
+- email (incluida en la librería estándar de Python)
+- csv (incluida en la librería estándar de Python)
+- re (incluida en la librería estándar de Python)
+- threading (incluida en la librería estándar de Python)
+- signal (incluida en la librería estándar de Python)
+- os (incluida en la librería estándar de Python)
+- sys (incluida en la librería estándar de Python)
+- time (incluida en la librería estándar de Python)
+- json (incluida en la librería estándar de Python)
+- functools (incluida en la librería estándar de Python)
+- datetime (incluida en la librería estándar de Python)
+
+Puedes instalar las dependencias externas con:
+
+```bash
+pip install playwright pyodbc openpyxl imapclient
+playwright install
+```
 
 ## Licencia
 

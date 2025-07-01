@@ -955,13 +955,12 @@ def main():
     id_ejecucion = None
 
     try:
-        # Iniciar timeout manager
-        timeout_manager.start()
-
         # Obtener ID de ejecución
         id_ejecucion = obtenerIDEjecucion()
         
         LogManager.iniciar_proceso(NOMBRE_BANCO, id_ejecucion, f"Automatización Banco Guayaquil - ID: {id_ejecucion}")
+        # Iniciar timeout manager
+        timeout_manager.start()
 
         # Registrar inicio de ejecución
         sql_inicio = f"""

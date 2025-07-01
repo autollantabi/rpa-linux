@@ -900,12 +900,12 @@ def asegurar_numero_unico(num_documento_base, documentos_bd, documentos_memoria)
 @with_timeout_check
 def ejecutar_proceso_crea():
     """Función principal que ejecuta todo el proceso de CREA"""
-    # Inicializar timeout
-    timeout_manager.start()
-    tiempo_inicio = datetime.now()
     id_ejecucion = obtenerIDEjecucion()
 
     LogManager.iniciar_proceso(NOMBRE_BANCO, id_ejecucion, f"Automatización {NOMBRE_BANCO} - Id de ejecución: {id_ejecucion}")
+    # Inicializar timeout
+    timeout_manager.start()
+    tiempo_inicio = datetime.now()
 
     playwright = None
     browser = None

@@ -1007,7 +1007,7 @@ def main():
         SubprocesoManager.ejecutar_bat_final()
 
         LogManager.finalizar_proceso(
-            "GUAYAQUIL", True, "Automatización completada exitosamente")
+            NOMBRE_BANCO, True, "Automatización completada exitosamente")
         return True
 
     except Exception as e:
@@ -1027,7 +1027,7 @@ def main():
             LogManager.escribir_log("INFO", "🔧 Ejecutando proceso final...")
             SubprocesoManager.ejecutar_bat_final()
 
-        LogManager.finalizar_proceso("GUAYAQUIL", False, error_msg)
+        LogManager.finalizar_proceso(NOMBRE_BANCO, False, error_msg)
         return False
 
     finally:

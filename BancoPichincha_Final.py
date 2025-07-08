@@ -107,6 +107,7 @@ def with_timeout_check(func):
 DATABASE = "RegistrosBancos"
 DATABASE_LOGS = "AutomationLog"
 DATABASE_RUNS = "AutomationRun"
+
 NOMBRE_BANCO = "Banco Pichincha"
 
 URLS = {
@@ -652,12 +653,12 @@ def obtenerDocumentosExcel(page, fecha_desde, fecha_hasta, empresa=None):
         selector_excel = "//a[@data-ng-click=\"exportar('excel')\"]"
 
         # Esperar un momento para que la página cargue
-        esperarConLoaderSimple(4, f"Esperando datos para {empresa}")
+        esperarConLoaderSimple(10, f"Esperando datos para {empresa}")
 
         ruta_archivo = ComponenteInteraccion.esperarDescarga(
             page,
             selector_excel,
-            timeout=10000,
+            timeout=20000,
             descripcion="descarga de movimientos"
         )
 

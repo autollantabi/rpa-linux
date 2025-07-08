@@ -31,6 +31,7 @@ RUTAS_CONFIG = {
     'descargas': "/home/administrador/configBancos/descargas",
     'logs': "/home/administrador/configBancos/logs",
     'bolivariano': "/home/administrador/configBancos/Bolivariano",
+    'pichincha': "/home/administrador/configBancos/Pichincha",
     'bat_final': "/home/administrador/Escritorio/UNION_BANCOS_0.1/UNION_BANCOS/UNION_BANCOS_run.sh"
 }
 
@@ -333,7 +334,7 @@ class ComponenteInteraccion:
         """
         try:
              # PASO 1: Verificar que el elemento existe y es visible
-            if not ComponenteInteraccion.esperarElemento(page, selector_boton, timeout=timeout//3, descripcion=f"botón {descripcion}"):
+            if not ComponenteInteraccion.esperarElemento(page, selector_boton, timeout=timeout, descripcion=f"botón {descripcion}"):
                 LogManager.escribir_log(
                     "ERROR", f"Elemento {descripcion} no encontrado")
                 return None

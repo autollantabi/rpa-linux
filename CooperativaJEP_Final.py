@@ -355,7 +355,7 @@ def iniciar_sesion(page, usuario, password):
 
         # Esperar a que cargue la tabla de cuentas (en lugar de ui-datatable genérico)
         ComponenteInteraccion.esperarElemento(
-            page, "//tbody[@id='j_idt118:j_idt120:tablaDatosConsolAhorros_data']", timeout=30000, descripcion="tabla de cuentas JEP")
+            page, "//tbody[contains(@id, 'tablaDatosConsolAhorros_data')]", timeout=30000, descripcion="tabla de cuentas JEP")
         LogManager.escribir_log(
             "SUCCESS", f"Sesión iniciada correctamente para: {usuario}")
         return True
@@ -459,7 +459,7 @@ def obtener_cantidad_empresas(page):
     try:
         # Usar el selector correcto para la tabla de cuentas
         filas = page.locator(
-            "//tbody[@id='j_idt118:j_idt120:tablaDatosConsolAhorros_data']/tr").all()
+            "//tbody[contains(@id, 'tablaDatosConsolAhorros_data')]/tr").all()
         cantidad = len(filas)
         LogManager.escribir_log(
             "DEBUG", f"Cantidad de filas encontradas: {cantidad}")
@@ -492,7 +492,7 @@ def regresar_a_dashboard(page):
                 esperarConLoaderSimple(3, "Esperando carga del dashboard")
 
                 # Verificar que la tabla de cuentas esté visible
-                if ComponenteInteraccion.esperarElemento(page, "//tbody[@id='j_idt118:j_idt120:tablaDatosConsolAhorros_data']", timeout=10000, descripcion="tabla de cuentas"):
+                if ComponenteInteraccion.esperarElemento(page, "//tbody[contains(@id, 'tablaDatosConsolAhorros_data')]", timeout=10000, descripcion="tabla de cuentas"):
                     return True
                 break
 
@@ -539,10 +539,10 @@ def seleccionar_empresa(page, posicion):
     try:
         if posicion == "ultima":
             # Última fila - hacer click en el enlace de la cuenta
-            enlace_xpath = "//tbody[@id='j_idt118:j_idt120:tablaDatosConsolAhorros_data']/tr[last()]//a[contains(@id, 'j_idt126')]"
+            enlace_xpath = "//tbody[contains(@id, 'tablaDatosConsolAhorros_data')]/tr[last()]//a[contains(@id, ':tablaDatosConsolAhorros:')]"
         else:  # primera
             # Primera fila - hacer click en el enlace de la cuenta
-            enlace_xpath = "//tbody[@id='j_idt118:j_idt120:tablaDatosConsolAhorros_data']/tr[1]//a[contains(@id, 'j_idt126')]"
+            enlace_xpath = "//tbody[contains(@id, 'tablaDatosConsolAhorros_data')]/tr[1]//a[contains(@id, ':tablaDatosConsolAhorros:')]"
 
         click_con_habilitacion(page, enlace_xpath, f"enlace cuenta {posicion}")
         LogManager.escribir_log("INFO", f"Cuenta seleccionada: {posicion}")
@@ -1151,7 +1151,7 @@ def cerrar_sesion(page):
     """Cierra la sesión actual en JEP"""
     try:
         # Intentar cerrar sesión usando el botón de cerrar sesión
-        boton_cerrar_sesion = "//a[@id='j_idt54']"
+        boton_cerrar_sesion = "//a[contains(@class, 'ui-commandlink') and .//i[contains(@class, 'fa-power-off')]]"
         if ComponenteInteraccion.clickComponenteOpcional(page, boton_cerrar_sesion, "botón cerrar sesión", intentos=2, timeout=5000):
             LogManager.escribir_log("INFO", "Sesión cerrada exitosamente")
             esperarConLoaderSimple(3, "Esperando cierre de sesión")

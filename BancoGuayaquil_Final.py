@@ -119,7 +119,7 @@ DATABASE_RUNS = "AutomationRun"
 NOMBRE_BANCO = "Banco Guayaquil"
 
 URLS = {
-    'login': "https://bancavirtual.bancoguayaquil.com/loginNR/auth/login",
+    'login': "https://empresas.bancoguayaquil.com/BancaEmpresas/login",
 }
 
 # ==================== FUNCIONES DE BASE DE DATOS ====================
@@ -593,7 +593,7 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa):
 
                 # Extraer datos de cada columna
                 fecha = fila[1] if len(fila) > 1 else ""  # Columna B
-                tipo_raw = fila[3] if len(fila) > 3 else ""  # Columna D
+                tipo_raw = fila[13] if len(fila) > 0 else ""  # Columna D
                 numero_documento_base = str(fila[4]) if len(
                     fila) > 4 else ""  # Columna E
                 concepto_transaccion = str(fila[5]) if len(
@@ -605,7 +605,7 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa):
                     fila) > 10 else ""  # Columna K
 
                 # Procesar tipo (crédito/débito)
-                tipo = "D" if "débito" in str(tipo_raw).lower() else "C"
+                tipo = "D" if "-" in str(tipo_raw).lower() else "C"
 
                 # Procesar valores monetarios
                 valor = str(valor_raw).replace("'", "").replace(

@@ -3,6 +3,7 @@
 BANCO BOLIVARIANO - PROCESAMIENTO DE ARCHIVOS TXT OPTIMIZADO
 Versión optimizada del procesador original usando componentes comunes
 """
+
 from datetime import datetime
 import time
 import os

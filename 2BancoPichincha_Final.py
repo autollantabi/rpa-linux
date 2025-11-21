@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-BANCO Pichincha - PROCESAMIENTO DE ARCHIVOS TXT OPTIMIZADO
+BANCO Pichincha - PROCESAMIENTO DE ARCHIVOS CSV OPTIMIZADO
 Versión optimizada del procesador original usando componentes comunes
 """
 from datetime import datetime
@@ -257,7 +257,7 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
 
 
 def obtenerArchivos():
-    """Obtiene la lista de archivos TXT para procesar, ordenados por fecha"""
+    """Obtiene la lista de archivos CSV para procesar, ordenados por fecha"""
     try:
 
         # Ruta por defecto si no está configurada
@@ -281,7 +281,7 @@ def obtenerArchivos():
         )
 
         LogManager.escribir_log(
-            "INFO", f"Encontrados {len(archivos_ordenados)} archivos TXT para procesar")
+            "INFO", f"Encontrados {len(archivos_ordenados)} archivos CSV para procesar")
         return archivos_ordenados
 
     except Exception as e:
@@ -302,7 +302,7 @@ def main():
         id_ejecucion = obtenerIDEjecucion()
 
         LogManager.iniciar_proceso(
-            NOMBRE_BANCO, id_ejecucion, f"Procesamiento archivos TXT Pichincha - ID: {id_ejecucion}")
+            NOMBRE_BANCO, id_ejecucion, f"Procesamiento archivos CSV Pichincha - ID: {id_ejecucion}")
 
         # Registrar inicio en BD
         sql_inicio = f"""
@@ -318,7 +318,7 @@ def main():
 
         if not archivos:
             LogManager.escribir_log(
-                "WARNING", "No se encontraron archivos TXT para procesar")
+                "WARNING", "No se encontraron archivos CSV para procesar")
             escribirLog("No se encontraron archivos para procesar",
                         id_ejecucion, "Warning", "Sin archivos")
 

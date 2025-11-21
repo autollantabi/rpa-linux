@@ -234,7 +234,7 @@ def ingresar_codigo_teclado_virtual(page, codigo):
         return False
 
 
-def manejar_codigo_seguridad_jep(page):
+def manejar_codigo_seguridad_jep(page, timestamp_inicio_login):
     """Maneja todo el proceso de obtención e ingreso del código de seguridad para JEP"""
     try:
         LogManager.escribir_log(
@@ -251,24 +251,56 @@ def manejar_codigo_seguridad_jep(page):
                 "INFO", "No se requiere código de seguridad")
             return True
         
-        # Obtener código del correo usando la función simplificada
-        codigo = CorreoManager.obtener_codigo_correo(
-            asunto="Código de Seguridad",  # Asunto específico de JEP
-        )
+        # Usar el timestamp de inicio de login (pasado como parámetro)
+        LogManager.escribir_log(
+            "INFO", f"Usando timestamp de inicio de login: {timestamp_inicio_login.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        
+        # Obtener código del correo usando asunto sin caracteres especiales para evitar problemas de encoding
+        # Intentar primero con asunto sin acentos, luego con el original
+        codigo = None
+        asuntos_intento = [
+            "Código de Seguridad",  # Con acento (original)
+            "Codigo de Seguridad",  # Sin acento para evitar problemas de encoding
+        ]
+        
+        for asunto_intento in asuntos_intento:
+            try:
+                LogManager.escribir_log(
+                    "INFO", f"Buscando código con asunto: '{asunto_intento}'")
+                codigo = CorreoManager.obtener_codigo_correo(
+                    asunto=asunto_intento,
+                    intentos=30,  # Reducir a 30 segundos en lugar de 60
+                    espera=1,
+                    timestamp_inicio=timestamp_inicio_login  # Pasar el timestamp de inicio de login para todas las búsquedas
+                )
+                if codigo:
+                    break
+            except Exception as e:
+                LogManager.escribir_log(
+                    "DEBUG", f"Error con asunto '{asunto_intento}': {str(e)}")
+                continue
 
-
-        if codigo and re.fullmatch(r"^\d{6}$", codigo):
+        if not codigo:
             LogManager.escribir_log(
-                "SUCCESS", f"Código JEP válido recibido: {codigo}")
+                "ERROR", "No se pudo obtener el código de seguridad del correo")
+            return False
 
-            # Ingresar código en teclado virtual
-            if ingresar_codigo_teclado_virtual(page, codigo):
-                    # No hay error, código fue aceptado
-                    LogManager.escribir_log(
-                        "SUCCESS", "Código JEP aceptado correctamente")
-            else:
-                raise Exception(
-                    "Error al ingresar el código JEP en el teclado virtual")
+        if not re.fullmatch(r"^\d{6}$", codigo):
+            LogManager.escribir_log(
+                "ERROR", f"Código recibido no es válido (debe ser 6 dígitos): {codigo}")
+            return False
+
+        LogManager.escribir_log(
+            "SUCCESS", f"Código JEP válido recibido: {codigo}")
+
+        # Ingresar código en teclado virtual
+        if not ingresar_codigo_teclado_virtual(page, codigo):
+            LogManager.escribir_log(
+                "ERROR", "Error al ingresar el código JEP en el teclado virtual")
+            return False
+
+        LogManager.escribir_log(
+            "SUCCESS", "Código JEP aceptado correctamente")
 
         # Esperar a que se complete la autenticación
         esperarConLoaderSimple(3, "Esperando autenticación completa")
@@ -313,8 +345,13 @@ def navegar_a_login(page):
 def iniciar_sesion(page, usuario, password):
     """Inicia sesión en la plataforma de JEP"""
     try:
+        # Guardar timestamp de inicio del proceso de login (antes de cualquier operación)
+        from datetime import datetime, timezone
+        timestamp_inicio_login = datetime.now(timezone.utc)
         LogManager.escribir_log(
             "INFO", f"Iniciando sesión para usuario: {usuario}")
+        LogManager.escribir_log(
+            "INFO", f"Timestamp de inicio de login: {timestamp_inicio_login.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
         login_button = "//button[.//span[contains(text(),'ACCEDER')]]"
         ComponenteInteraccion.esperarElemento(
@@ -348,7 +385,7 @@ def iniciar_sesion(page, usuario, password):
                 break
 
         # Código de seguridad
-        if not manejar_codigo_seguridad_jep(page):
+        if not manejar_codigo_seguridad_jep(page, timestamp_inicio_login):
             LogManager.escribir_log(
                 "ERROR", "Falló la validación del código de seguridad")
             return False
@@ -709,6 +746,24 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
         LogManager.escribir_log(
             "INFO", "🔎 Consultando registros existentes en la base de datos...")
 
+        # CONSULTA 1: Obtener TODOS los documentos para esta cuenta y banco (para verificar PRIMARY KEY)
+        # La PRIMARY KEY es (numCuenta, banco, numDocumento), así que necesitamos todos los documentos
+        sql_documentos = f"""
+            SELECT DISTINCT numDocumento
+            FROM {DATABASE}
+            WHERE numCuenta = '{cuenta}' 
+            AND banco = '{CONFIG_JEP['banco_codigo']}'
+        """
+        documentos_bd_todos = BaseDatos.consultarBD(sql_documentos)
+        documentos_existentes_en_bd = set()
+        if documentos_bd_todos:
+            for doc in documentos_bd_todos:
+                documentos_existentes_en_bd.add(str(doc[0]))
+        
+        LogManager.escribir_log(
+            "INFO", f"📋 Documentos existentes encontrados: {len(documentos_existentes_en_bd)}")
+
+        # CONSULTA 2: Obtener registros en el rango de fechas para verificar combinaciones
         sql_consulta = f"""
             SELECT numDocumento, fechaTransaccion, valor, tipo, conceptoTransaccion
             FROM {DATABASE}
@@ -720,29 +775,18 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
 
         registros_existentes = BaseDatos.consultarBD(sql_consulta)
         combinaciones_existentes = set()
-        documentos_existentes_en_bd = set()
-        registros_completos_existentes = set()
 
         if registros_existentes:
             for registro in registros_existentes:
-                doc_bd = str(registro[0])
                 fecha_bd = str(registro[1])
                 valor_bd = float(registro[2])
                 tipo_bd = str(registro[3])
                 concepto_bd = str(registro[4]) if registro[4] else ""
 
-                documentos_existentes_en_bd.add(doc_bd)
-
-                # Crear combinación única (sin considerar sufijos en numDocumento)
-                doc_base = doc_bd.split('_')[0] if '_' in doc_bd else doc_bd
-                # Combinación única: fecha + valor + tipo + concepto (más preciso)
-                # Limitar concepto
+                # Crear combinación única: fecha + valor + tipo + concepto (más preciso)
+                # Esta combinación determina si es el mismo registro
                 clave_combinacion = f"{fecha_bd}|{valor_bd}|{tipo_bd}|{concepto_bd[:50]}"
                 combinaciones_existentes.add(clave_combinacion)
-
-                # Registro completo para verificación exacta
-                registro_completo = f"{doc_base}|{fecha_bd}|{valor_bd}|{tipo_bd}"
-                registros_completos_existentes.add(registro_completo)
         else:
             LogManager.escribir_log(
                 "INFO", "📋 No se encontraron registros existentes en el rango de fechas")
@@ -753,7 +797,6 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
         filas_procesadas = 0
         documentos_procesados_en_memoria = set()
         combinaciones_procesadas_memoria = set()
-        registros_procesados_memoria = set()
 
         for i in range(7, len(contenido)):  # Empezar desde fila 8 (índice 7)
             fila = contenido[i]
@@ -796,19 +839,22 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
 
                 clave_combinacion_archivo = f"{fecha_convertida}|{valor}|{tipo_trx}|{descripcion_final[:50]}"
 
-                # Verificar si ya existe por combinación (más importante que documento)
+                # PASO 1: Verificar si ya existe por combinación (fecha+valor+tipo+concepto)
+                # Si la combinación existe, es el mismo registro, omitir
                 if clave_combinacion_archivo in combinaciones_existentes:
                     movimientos_omitidos += 1
+                    LogManager.escribir_log(
+                        "DEBUG", f"📋 Movimiento omitido (combinación duplicada en BD): {fecha_convertida} - ${valor} - {tipo_trx}")
                     continue
 
-                # Verificar si ya se procesó en memoria
+                # Verificar si ya se procesó en memoria (mismo archivo)
                 if clave_combinacion_archivo in combinaciones_procesadas_memoria:
                     movimientos_omitidos += 1
                     LogManager.escribir_log(
                         "DEBUG", f"📋 Movimiento omitido (duplicado en archivo): {fecha_convertida} - ${valor} - {tipo_trx}")
                     continue
 
-                # Procesar número de documento
+                # PASO 2: Procesar número de documento
                 if num_documento_raw and num_documento_raw.strip():
                     num_documento_base = num_documento_raw.strip()
                 else:
@@ -821,48 +867,92 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
                     saldo_codigo = str(saldo).replace('.', '').replace(',', '')
                     num_documento_base = f"{fecha_codigo}{tipo_codigo}{concepto_codigo}{agencia_codigo}{monto_codigo}{saldo_codigo}G"
 
-                # Verificación adicional por registro completo (documento base + fecha + valor + tipo)
-                registro_completo_archivo = f"{num_documento_base}|{fecha_convertida}|{valor}|{tipo_trx}"
-                if registro_completo_archivo in registros_completos_existentes:
-                    movimientos_omitidos += 1
-                    continue
-
-                if registro_completo_archivo in registros_procesados_memoria:
-                    movimientos_omitidos += 1
-                    LogManager.escribir_log(
-                        "DEBUG", f"📋 Movimiento omitido (duplicado exacto en archivo): {num_documento_base} - {fecha_convertida}")
-                    continue
-
-                # Obtener contador de fecha
+                # PASO 3: Obtener contador de fecha
                 cont_fecha = obtener_contador_fecha(
                     cuenta, empresa, fecha_convertida)
 
-                # Asegurar número de documento único (solo para el número final, no afecta la verificación)
+                # PASO 4: Asegurar número de documento único
+                # Si el número de documento ya existe pero la combinación es diferente,
+                # agregar sufijo para diferenciarlo
                 num_documento_final = asegurar_numero_unico(
                     num_documento_base, documentos_existentes_en_bd, documentos_procesados_en_memoria)
-
-                # Insertar en base de datos
-                sql_insert = f"""
-                    INSERT INTO {DATABASE} 
-                    (numCuenta, banco, empresa, numDocumento, idEjecucion, fechaTransaccion, 
-                     tipo, valor, saldoContable, oficina, conceptoTransaccion, contFecha)
-                    VALUES ('{cuenta}', '{CONFIG_JEP['banco_codigo']}', '{empresa.replace("'", "''")}', 
-                            '{num_documento_final}', {id_ejecucion}, '{fecha_convertida}', 
-                            '{tipo_trx}', {valor}, {saldo}, '{oficina.replace("'", "''")}', 
-                            '{descripcion_final.replace("'", "''")}', {cont_fecha})
-                """
-
-                if datosEjecucion(sql_insert):
-                    movimientos_insertados += 1
-                    documentos_procesados_en_memoria.add(num_documento_final)
-                    combinaciones_procesadas_memoria.add(clave_combinacion)
-                    registros_procesados_memoria.add(registro_completo_archivo)
-
+                
+                # Si se agregó un sufijo, loguear la razón
+                if num_documento_final != num_documento_base:
                     LogManager.escribir_log(
-                        "DEBUG", f"Movimiento insertado: {num_documento_final} - {fecha_convertida}")
-                else:
+                        "DEBUG", f"📝 Número de documento con sufijo: {num_documento_base} -> {num_documento_final} (número duplicado pero combinación diferente)")
+
+                # VERIFICACIÓN FINAL: Asegurar que el documento final no existe antes de insertar
+                # Esto previene errores de PRIMARY KEY (numCuenta, banco, numDocumento)
+                intentos_verificacion = 0
+                while (num_documento_final in documentos_existentes_en_bd or 
+                       num_documento_final in documentos_procesados_en_memoria) and intentos_verificacion < 10:
+                    intentos_verificacion += 1
                     LogManager.escribir_log(
-                        "ERROR", f"Error insertando movimiento: {num_documento_final}")
+                        "WARNING", f"⚠️ Documento {num_documento_final} aún existe (intento {intentos_verificacion}), buscando siguiente sufijo...")
+                    
+                    # Extraer el sufijo actual si existe
+                    if "_" in num_documento_final:
+                        partes = num_documento_final.rsplit("_", 1)
+                        try:
+                            sufijo_actual = int(partes[1])
+                            num_documento_final = f"{num_documento_base}_{sufijo_actual + 1}"
+                        except:
+                            num_documento_final = f"{num_documento_base}_1"
+                    else:
+                        num_documento_final = f"{num_documento_base}_1"
+                
+                if intentos_verificacion >= 10:
+                    # Si después de 10 intentos aún hay conflicto, usar timestamp
+                    num_documento_final = f"{num_documento_base}_{int(time.time())}"
+                    LogManager.escribir_log(
+                        "WARNING", f"⚠️ Usando timestamp para número de documento único: {num_documento_final}")
+
+                # Insertar en base de datos con reintentos en caso de PRIMARY KEY duplicada
+                intentos_insert = 0
+                insertado = False
+                
+                while not insertado and intentos_insert < 5:
+                    sql_insert = f"""
+                        INSERT INTO {DATABASE} 
+                        (numCuenta, banco, empresa, numDocumento, idEjecucion, fechaTransaccion, 
+                         tipo, valor, saldoContable, oficina, conceptoTransaccion, contFecha)
+                        VALUES ('{cuenta}', '{CONFIG_JEP['banco_codigo']}', '{empresa.replace("'", "''")}', 
+                                '{num_documento_final}', {id_ejecucion}, '{fecha_convertida}', 
+                                '{tipo_trx}', {valor}, {saldo}, '{oficina.replace("'", "''")}', 
+                                '{descripcion_final.replace("'", "''")}', {cont_fecha})
+                    """
+
+                    if datosEjecucion(sql_insert):
+                        movimientos_insertados += 1
+                        # Agregar a los sets de memoria para evitar duplicados en el mismo procesamiento
+                        documentos_procesados_en_memoria.add(num_documento_final)
+                        documentos_existentes_en_bd.add(num_documento_final)  # Actualizar también el set de BD
+                        combinaciones_procesadas_memoria.add(clave_combinacion_archivo)
+
+                        LogManager.escribir_log(
+                            "DEBUG", f"✅ Movimiento insertado: {num_documento_final} - {fecha_convertida} - ${valor} - {tipo_trx}")
+                        insertado = True
+                    else:
+                        # Si falla por PRIMARY KEY, intentar con siguiente sufijo
+                        intentos_insert += 1
+                        if intentos_insert < 5:
+                            LogManager.escribir_log(
+                                "WARNING", f"⚠️ Error insertando {num_documento_final} (intento {intentos_insert}), intentando con siguiente sufijo...")
+                            
+                            # Buscar siguiente sufijo
+                            if "_" in num_documento_final:
+                                partes = num_documento_final.rsplit("_", 1)
+                                try:
+                                    sufijo_actual = int(partes[1])
+                                    num_documento_final = f"{num_documento_base}_{sufijo_actual + 1}"
+                                except:
+                                    num_documento_final = f"{num_documento_base}_{intentos_insert + 1}"
+                            else:
+                                num_documento_final = f"{num_documento_base}_{intentos_insert + 1}"
+                        else:
+                            LogManager.escribir_log(
+                                "ERROR", f"❌ Error insertando movimiento después de {intentos_insert} intentos: {num_documento_final}")
 
             except Exception as e:
                 LogManager.escribir_log(
@@ -885,6 +975,8 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
             "INFO", f"📝 Documentos únicos procesados: {len(documentos_procesados_en_memoria)}")
         LogManager.escribir_log(
             "INFO", f"🔑 Combinaciones únicas procesadas: {len(combinaciones_procesadas_memoria)}")
+        LogManager.escribir_log(
+            "INFO", f"📋 Combinaciones existentes en BD: {len(combinaciones_existentes)}")
 
         # Considerar éxito tanto si hay nuevos como si no hay
         if movimientos_insertados > 0:
@@ -931,24 +1023,59 @@ def obtener_contador_fecha(cuenta, empresa, fecha):
 
 
 def asegurar_numero_unico(num_documento_base, documentos_bd, documentos_memoria):
-    """Asegura que el número de documento sea único"""
+    """
+    Asegura que el número de documento sea único.
+    Si el número base ya existe, busca el siguiente sufijo disponible.
+    """
     try:
-        # Verificar si el número base ya existe
-        if num_documento_base not in documentos_bd and num_documento_base not in documentos_memoria:
+        # Verificar si el número base ya existe (con o sin sufijo)
+        existe_base = num_documento_base in documentos_bd or num_documento_base in documentos_memoria
+        
+        # Si no existe el número base, retornarlo directamente
+        if not existe_base:
             return num_documento_base
 
-        # Buscar un sufijo disponible
-        sufijo = 1
-        while True:
-            num_documento_con_sufijo = f"{num_documento_base}_{sufijo}"
-            if num_documento_con_sufijo not in documentos_bd and num_documento_con_sufijo not in documentos_memoria:
-                LogManager.escribir_log(
-                    "DEBUG", f"Número con sufijo generado: {num_documento_con_sufijo}")
-                return num_documento_con_sufijo
-            sufijo += 1
+        # Si existe el número base, buscar el siguiente sufijo disponible
+        # Buscar todos los sufijos existentes para este número base
+        sufijos_existentes = set()
+        
+        # Buscar en documentos de BD
+        for doc in documentos_bd:
+            if doc == num_documento_base:
+                sufijos_existentes.add(0)  # El base existe
+            elif doc.startswith(num_documento_base + "_"):
+                try:
+                    sufijo_str = doc[len(num_documento_base) + 1:]  # Obtener parte después de "_"
+                    # Verificar si es un número
+                    if sufijo_str.isdigit():
+                        sufijos_existentes.add(int(sufijo_str))
+                except:
+                    pass
+        
+        # Buscar en documentos en memoria
+        for doc in documentos_memoria:
+            if doc == num_documento_base:
+                sufijos_existentes.add(0)  # El base existe
+            elif doc.startswith(num_documento_base + "_"):
+                try:
+                    sufijo_str = doc[len(num_documento_base) + 1:]  # Obtener parte después de "_"
+                    # Verificar si es un número
+                    if sufijo_str.isdigit():
+                        sufijos_existentes.add(int(sufijo_str))
+                except:
+                    pass
 
-            if sufijo > 100:  # Evitar bucle infinito
+        # Encontrar el siguiente sufijo disponible
+        sufijo = 1
+        while sufijo in sufijos_existentes:
+            sufijo += 1
+            if sufijo > 1000:  # Evitar bucle infinito
                 return f"{num_documento_base}_{int(time.time())}"
+
+        num_documento_con_sufijo = f"{num_documento_base}_{sufijo}"
+        LogManager.escribir_log(
+            "DEBUG", f"📝 Número con sufijo generado: {num_documento_base} -> {num_documento_con_sufijo} (sufijos existentes: {sorted(sufijos_existentes)})")
+        return num_documento_con_sufijo
 
     except Exception as e:
         LogManager.escribir_log(

@@ -464,6 +464,8 @@ def procesar_empresa_individual(page, nombre_empresa, id_ejecucion):
         if not ComponenteInteraccion.esperarElemento(page, selector_descarga, timeout=5000, descripcion=f"botón descargar"):
             LogManager.escribir_log(
                 "WARNING", f"No se encontraron datos para descargar en empresa: {nombre_empresa}")
+            # Actualizar fechas incluso cuando no hay datos, ya que es normal
+            ConfiguracionManager.actualizar_configuraciones_fecha()
             return False
 
         # PASO 5: Descargar y procesar archivo
@@ -1020,6 +1022,8 @@ if __name__ == "__main__":
                 "SUCCESS", f"Robot {NOMBRE_BANCO} finalizado exitosamente")
             sys.exit(0)
         else:
+            # Actualizar configuraciones de fecha
+            ConfiguracionManager.actualizar_configuraciones_fecha()
             LogManager.escribir_log(
                 "ERROR", f"Robot {NOMBRE_BANCO} finalizado con errores")
             sys.exit(1)

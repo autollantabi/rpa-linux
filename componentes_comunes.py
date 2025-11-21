@@ -785,7 +785,7 @@ class EsperasInteligentes:
     """Clase para manejar esperas específicas sin time.sleep"""
 
     @staticmethod
-    def esperar_carga_pagina(page, timeout=30000):
+    def esperar_carga_pagina(page, timeout=40000):
         """Espera a que la página termine de cargar completamente"""
         try:
             page.wait_for_load_state("networkidle", timeout=timeout)
@@ -1608,7 +1608,7 @@ class CorreoManager:
             return ""
 
     @staticmethod
-    def obtener_codigo_correo(asunto="Nuevo token", intentos=60, espera=1, key='mail.maxximundo.com'):
+    def obtener_codigo_correo(asunto="Nuevo token", intentos=60, espera=1, key='mail.maxximundo.com', timestamp_inicio=None):
         """
         Obtiene un código de 6 dígitos de un correo electrónico específico
         usando credenciales del archivo de configuración
@@ -1618,6 +1618,7 @@ class CorreoManager:
             intentos: Número de intentos
             espera: Segundos entre intentos
             key: Servidor de correo a buscar
+            timestamp_inicio: Timestamp de inicio del proceso (opcional). Si no se proporciona, se usa el momento actual
 
         Returns:
             str: Código de 6 dígitos o None si no se encuentra
@@ -1628,6 +1629,7 @@ class CorreoManager:
             import email
             import time
             import re
+            from datetime import datetime, timezone
 
             LogManager.escribir_log(
                 "INFO", f"Conectando al servidor de correo para obtener token con asunto: '{asunto}'...")
@@ -1665,52 +1667,25 @@ class CorreoManager:
             mail.login(correo, clave_correo)
             mail.select("inbox")
 
-            try:
-                # Crear variantes del asunto para búsqueda más flexible
-                variantes_asunto = [
-                    asunto,  # Asunto exacto
-                    asunto.replace("Código", "Codigo"),  # Sin acento
-                    asunto.replace("código", "codigo"),  # Sin acento minúscula
-                    asunto.replace("Nuevo token", "token"),  # Versión corta
-                ]
+            # Usar timestamp proporcionado o crear uno nuevo si no se proporciona
+            if timestamp_inicio is None:
+                timestamp_inicio = datetime.now(timezone.utc)
+                LogManager.escribir_log("INFO", f"Timestamp de inicio creado: {timestamp_inicio.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            else:
+                LogManager.escribir_log("INFO", f"Timestamp de inicio proporcionado: {timestamp_inicio.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
-                # Remover duplicados manteniendo orden
-                variantes_asunto = list(dict.fromkeys(variantes_asunto))
+            # Crear variantes del asunto para búsqueda más flexible
+            variantes_asunto = [
+                asunto,  # Asunto exacto
+                asunto.replace("Código", "Codigo"),  # Sin acento
+                asunto.replace("código", "codigo"),  # Sin acento minúscula
+                asunto.replace("Nuevo token", "token"),  # Versión corta
+            ]
 
-                correos_marcados_total = 0
+            # Remover duplicados manteniendo orden
+            variantes_asunto = list(dict.fromkeys(variantes_asunto))
 
-                for variante in variantes_asunto:
-                    try:
-                        # Buscar correos con esta variante del asunto
-                        # Usar búsqueda sin comillas para mayor flexibilidad
-                        search_command = f'SUBJECT "{variante}"'
-                        result, data = mail.search(None, search_command)
-
-                        if data and data[0]:
-                            correo_ids = data[0].split()
-
-                            # Solo marcar los últimos 5 correos con este asunto
-                            ultimos_correos = correo_ids[-5:] if len(
-                                correo_ids) > 5 else correo_ids
-
-                            for email_id in ultimos_correos:
-                                try:
-                                    mail.store(email_id, '+FLAGS', '\\Seen')
-                                    correos_marcados_total += 1
-                                except Exception as e:
-                                    LogManager.escribir_log(
-                                        "DEBUG", f"Error marcando correo {email_id}: {str(e)}")
-
-                    except Exception as e:
-                        LogManager.escribir_log(
-                            "DEBUG", f"Error buscando variante '{variante}': {str(e)}")
-                        continue
-
-            except Exception as e:
-                LogManager.escribir_log(
-                    "WARNING", f"Error marcando correos previos: {str(e)}")
-
-             # BUCLE PRINCIPAL CON PROGRESO VISUAL
+            # BUCLE PRINCIPAL CON PROGRESO VISUAL
             LogManager.escribir_log("INFO", f"Buscando código de seguridad - Máximo {intentos} segundos...")
 
             for intento in range(intentos):
@@ -1725,14 +1700,29 @@ class CorreoManager:
                     mensaje = f"\r🔍 Buscando código: [{barra}] {intento+1}/{intentos} intentos - {tiempo_restante}s restantes"
                     print(mensaje, end="", flush=True)
 
-                    # Buscar correos no leídos con el asunto específico
+                    # Buscar TODOS los correos (leídos y no leídos) con el asunto específico
                     codigo_encontrado = None
 
                     for variante in variantes_asunto:
                         try:
-                            # Buscar correos no leídos con esta variante del asunto
-                            search_command = f'(UNSEEN SUBJECT "{variante}")'
-                            result, data = mail.search(None, search_command)
+                            # Buscar TODOS los correos con esta variante del asunto (no solo no leídos)
+                            # Manejar encoding correctamente para IMAP
+                            search_command = f'SUBJECT "{variante}"'
+                            try:
+                                result, data = mail.search(None, search_command)
+                            except Exception as search_error:
+                                # Si hay error (posiblemente por encoding), usar versión sin caracteres especiales
+                                error_str = str(search_error).lower()
+                                if 'ascii' in error_str or 'encode' in error_str or 'codec' in error_str:
+                                    variante_safe = variante.encode('ascii', 'ignore').decode('ascii')
+                                    if variante_safe:  # Solo usar si hay algo después de eliminar caracteres especiales
+                                        search_command = f'SUBJECT "{variante_safe}"'
+                                        result, data = mail.search(None, search_command)
+                                    else:
+                                        continue
+                                else:
+                                    # Re-lanzar el error si no es de encoding
+                                    raise
 
                             if not data or not data[0]:
                                 continue
@@ -1740,7 +1730,13 @@ class CorreoManager:
                             ids = data[0].split()
 
                             # Procesar correos del más reciente al más antiguo
-                            for email_id in reversed(ids):
+                            # Limitar a los primeros 5 correos más recientes para evitar procesar demasiados
+                            ids_a_procesar = list(reversed(ids))[:5]
+                            for email_id in ids_a_procesar:
+                                # Si ya encontramos el código, salir inmediatamente
+                                if codigo_encontrado:
+                                    break
+                                
                                 try:
 
                                     # Obtener el correo completo
@@ -1752,6 +1748,31 @@ class CorreoManager:
 
                                     mensaje = email.message_from_bytes(
                                         data[0][1])
+
+                                    # Obtener fecha del correo y comparar con timestamp de inicio
+                                    fecha_correo_str = mensaje.get("Date", "")
+                                    if fecha_correo_str:
+                                        try:
+                                            # Convertir fecha del correo a datetime
+                                            fecha_correo_tuple = email.utils.parsedate_tz(fecha_correo_str)
+                                            if fecha_correo_tuple:
+                                                fecha_correo = datetime.fromtimestamp(
+                                                    email.utils.mktime_tz(fecha_correo_tuple), 
+                                                    tz=timezone.utc
+                                                )
+                                                
+                                                # Solo procesar correos que llegaron DESPUÉS del inicio del programa
+                                                if fecha_correo < timestamp_inicio:
+                                                    LogManager.escribir_log(
+                                                        "DEBUG", f"Correo ignorado: llegó antes del inicio ({fecha_correo.strftime('%Y-%m-%d %H:%M:%S')} UTC < {timestamp_inicio.strftime('%Y-%m-%d %H:%M:%S')} UTC)")
+                                                    continue
+                                                
+                                                LogManager.escribir_log(
+                                                    "DEBUG", f"Correo válido: llegó después del inicio ({fecha_correo.strftime('%Y-%m-%d %H:%M:%S')} UTC)")
+                                        except Exception as e:
+                                            LogManager.escribir_log(
+                                                "DEBUG", f"Error parseando fecha del correo: {str(e)}")
+                                            # Si no se puede parsear la fecha, continuar procesando (por seguridad)
 
                                     # Verificar asunto específicamente
                                     subject = mensaje.get("Subject", "")
@@ -1787,7 +1808,7 @@ class CorreoManager:
                                         if not coincide_asunto:
                                             continue
 
-                                        print("/n")
+                                        print("\n", end="", flush=True)
                                         LogManager.escribir_log(
                                             "SUCCESS", f"✅ Correo con asunto correcto encontrado: '{subject}'")
 
@@ -1871,6 +1892,13 @@ class CorreoManager:
                                             continue
 
                                     if codigo_encontrado:
+                                        # Marcar el correo como leído SOLO después de encontrar el código
+                                        try:
+                                            mail.store(email_id, '+FLAGS', '\\Seen')
+                                            LogManager.escribir_log("DEBUG", f"Correo marcado como leído después de encontrar código")
+                                        except Exception as e:
+                                            LogManager.escribir_log("DEBUG", f"Error marcando correo como leído: {str(e)}")
+                                        
                                         # COMPLETAR BARRA AL 100% Y MOSTRAR ÉXITO
                                         barra_completa = "█" * 20
                                         mensaje_final = f"\r✅ Código encontrado: [{barra_completa}] {codigo_encontrado} - Encontrado en {intento+1}/{intentos} intentos"
@@ -1878,28 +1906,43 @@ class CorreoManager:
                                         print()  # Nueva línea
                                         
                                         LogManager.escribir_log("SUCCESS", f"🎉 Código de seguridad obtenido: {codigo_encontrado}")
-                                        mail.logout()
+                                        
+                                        # Retornar inmediatamente después de encontrar el código
+                                        # No hacer logout aquí para evitar bloqueos - se cerrará automáticamente
                                         return codigo_encontrado
                                     
                                 except Exception as e:
+                                    # Si hay un error pero ya encontramos el código, salir inmediatamente
+                                    if codigo_encontrado:
+                                        return codigo_encontrado
                                     continue
 
-                            # Si encontramos código, salir del bucle de variantes
+                            # Si encontramos código, salir del bucle de variantes inmediatamente
                             if codigo_encontrado:
                                 break
 
                         except Exception as e:
+                            # Si hay un error pero ya encontramos el código, salir inmediatamente
+                            if codigo_encontrado:
+                                return codigo_encontrado
                             continue
 
-                    # Si encontramos código, salir del bucle de intentos
+                    # Si encontramos código, salir del bucle de intentos inmediatamente
                     if codigo_encontrado:
-                        break
+                        return codigo_encontrado
 
                 except Exception as e:
+                    # Si hay un error pero ya encontramos el código, salir
+                    if codigo_encontrado:
+                        try:
+                            mail.logout()
+                        except:
+                            pass
+                        return codigo_encontrado
                     pass
 
-                # Esperar antes del siguiente intento
-                if intento < intentos - 1:
+                # Esperar antes del siguiente intento (solo si no encontramos código)
+                if not codigo_encontrado and intento < intentos - 1:
                     time.sleep(espera)
 
             # MOSTRAR RESULTADO FINAL SI NO SE ENCONTRÓ
@@ -1909,6 +1952,13 @@ class CorreoManager:
             print()  # Nueva línea
 
             # Si llegamos aquí, no se encontró el código
+            # Cerrar conexión antes de retornar
+            try:
+                if mail:
+                    mail.logout()
+            except:
+                pass
+            
             LogManager.escribir_log(
                 "ERROR", f"❌ No se encontró código de seguridad con asunto '{asunto}' después de {intentos} segundos")
             return None
@@ -1917,6 +1967,13 @@ class CorreoManager:
             # Limpiar línea de progreso en caso de error
             print(f"\r❌ Error: {str(e)}" + " " * 50, flush=True)
             print()  # Nueva línea
+            
+            # Cerrar conexión en caso de error
+            try:
+                if 'mail' in locals() and mail:
+                    mail.logout()
+            except:
+                pass
             
             LogManager.escribir_log(
                 "ERROR", f"❌ Error crítico obteniendo código del correo: {str(e)}")

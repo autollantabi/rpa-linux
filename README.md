@@ -2,6 +2,8 @@
 
 Automatización bancaria multiplataforma para Linux usando **Python** y **Playwright**. Esta carpeta contiene los scripts que automatizan consultas, descargas de movimientos y procesamiento por empresa para varios bancos y cooperativas.
 
+- **Repositorio:** el proyecto está vinculado al GitHub de **autollantabi** (`https://github.com/autollantabi/rpa-linux`).
+
 ---
 
 ## Bancos y cooperativas soportados
@@ -63,7 +65,7 @@ bancos/
 
 **Particularidades:**
 - **Guayaquil:** Cierre de iframe/modal de seguridad antes de elegir empresa; manejo de varios selectores para autocomplete de empresa.
-- **Pichincha:** Flujo estándar con código por correo y descarga por empresa.
+- **Pichincha:** Flujo estándar con código por correo y descarga por empresa. Por la autenticación actual del banco (código por celular), la **subida manual** de movimientos se realiza en horarios fijos: **11:30 AM** y **5:00 PM** (hora Ecuador).
 
 ### Banco Bolivariano (solo archivos)
 
@@ -101,6 +103,28 @@ Todos los `.sh` están pensados para ejecutarse desde Linux (por ejemplo desde c
 - **bashJEP_manual.sh:** Solo activa el venv y ejecuta `CooperativaJEP_Final.py --manual` para procesar archivos JEP ya descargados; no usa Xvfb ni navegador.
 
 Si cambias de ruta (por ejemplo otra carpeta o otro usuario), hay que editar las rutas dentro de cada `.sh` (`cd`, `source .../venv/bin/activate`).
+
+---
+
+## Carpeta configBancos (archivos necesarios)
+
+Parte de los archivos que usan los scripts **no están en esta carpeta** sino en la carpeta de configuración:
+
+- **Ruta:** `/home/administrador/configBancos`
+
+Ahí se encuentran, entre otros:
+- **config/:** credenciales de bancos (`credencialesBanco.csv`), correo (`credencialesCorreo.csv`), base de datos (`credencialesDB.csv`), configuraciones y rutas (`configuraciones.csv`, `rutas.csv`).
+- **descargas/:** archivos descargados por Playwright (movimientos Excel/CSV) y usados por JEP en modo manual, estos archivos de la JEP si se quieren cargar manual, deben ser movidos aca con los siguientes nombres: jepAutollanta.xlsx, jepAutollantaT.xslx, jepMaxximundo.xlsx; para saber que cuenta pertenece el tecnicentro revisar el archivo de CooperativaJEP_final.py (linea 125).
+- **logs/:** logs por banco y por ejecución.
+- **Bolivariano/:** archivos TXT para Banco Bolivariano (descargados manualmente).
+
+Las rutas exactas están definidas en `RUTAS_CONFIG` dentro de `componentes_comunes.py`. Si instalas en otra máquina, crea o copia la estructura de `configBancos` en la ruta que uses y ajusta `RUTAS_CONFIG`.
+
+---
+
+## Ejecución programada (cron)
+
+Los bancos que **sí pueden ejecutarse solos** (Guayaquil, Produbanco, Bolivariano, JEP, etc.) están configurados en el **cron de Linux** con **horarios distintos** para cada uno, de modo que no se solapen y no dependan unos de otros. Los scripts bash correspondientes se invocan desde el crontab según esos horarios.
 
 ---
 
@@ -166,7 +190,6 @@ Además se exportan funciones de conveniencia (`clickComponente`, `escribirCompo
      ./bashGuayaquil.sh
      ./bashProdubanco.sh
      ./bashJEP.sh
-     ./bashCREA.sh
      ```
    - Solo procesamiento de archivos:
      ```bash
@@ -187,7 +210,7 @@ Para **Bolivariano** hay que tener los TXT en la carpeta configurada antes de ej
 
 ## Configuración y logs
 
-- **Credenciales y rutas:** En `configBancos/config/` (credencialesBanco.csv, credencialesCorreo.csv, credencialesDB.csv, configuraciones.csv, rutas.csv). Las rutas por defecto se definen en `componentes_comunes.py` (`RUTAS_CONFIG`).
+- **Credenciales y rutas:** En la carpeta **configBancos**, subcarpeta `config/` — ruta completa `/home/administrador/configBancos/config/` (credencialesBanco.csv, credencialesCorreo.csv, credencialesDB.csv, configuraciones.csv, rutas.csv). Las rutas por defecto se definen en `componentes_comunes.py` (`RUTAS_CONFIG`).
 - **Logs:** Se guardan por banco y por ejecución en la carpeta `logs/` indicada en `RUTAS_CONFIG` (por defecto `/home/administrador/configBancos/logs`).
 - **Descargas:** Los archivos descargados por Playwright van a la carpeta `descargas` de `RUTAS_CONFIG`; Bolivariano y JEP manual leen desde sus rutas configuradas.
 
@@ -222,4 +245,4 @@ MIT
 ---
 
 **Desarrollado por Diego Barbecho**  
-**GitProfile: https://github.com/BrujoFurioso22**
+**GitProfile: https://github.com/diegobarpdev**

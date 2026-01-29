@@ -111,7 +111,8 @@ def formatear_tiempo_ejecucion(tiempo_delta):
     return f"{minutos}m {segundos}s"
 
 # ==================== CONFIGURACIÓN GLOBAL ====================
-
+# source /home/administrador/Escritorio/venv/bin/activate
+# ejecucion manual python CooperativaJEP_Final.py --manual
 
 # DATABASE = "RegistrosBancosPRUEBA"
 # DATABASE_LOGS = "AutomationLogPRUEBA"
@@ -124,7 +125,7 @@ NOMBRE_BANCO = "Cooperativa JEP"
 NUM_CUENTA_TECNICENTRO = "406102270900"
 
 URLS = {
-    'login': "https://jepvirtual.coopjep.fin.ec/empresas/",
+    'login': "https://jepvirtual.jep.coop/empresas/signinEmpresas.jsf",
 }
 
 # Configuración específica de JEP
@@ -314,25 +315,82 @@ def manejar_codigo_seguridad_jep(page, timestamp_inicio_login):
 
 # ==================== FUNCIONES DE NAVEGACIÓN ====================
 
+def cerrar_modal_cookies(page):
+    """Cierra el modal de cookies que aparece al cargar la página"""
+    try:
+        LogManager.escribir_log("INFO", "Buscando modal de cookies...")
+        
+        # Esperar un momento para que aparezca el modal
+        esperarConLoaderSimple(2, "Esperando aparición del modal de cookies")
+        
+        # Múltiples selectores para el botón "Aceptar" del modal de cookies
+        selectores_boton_aceptar = [
+            "//div[@id='cookieDialog']//button[contains(@class, 'btn-cancel') and contains(text(), 'Aceptar')]",
+            "//div[@class='jep-politica-privacidad']//button[contains(@class, 'btn-cancel')]",
+            "//div[@id='cookieDialog']//button[contains(@onclick, 'acceptCookies')]",
+            "//div[@class='modal modalCookies']//button[contains(text(), 'Aceptar')]",
+            "//button[@onclick='acceptCookies()']",
+            "//div[@class='botonescookies']//button[contains(text(), 'Aceptar')]",
+        ]
+        
+        boton_clickeado = False
+        for selector_boton in selectores_boton_aceptar:
+            try:
+                LogManager.escribir_log("INFO", f"Buscando botón 'Aceptar' cookies con selector: {selector_boton}")
+                if ComponenteInteraccion.esperarElemento(page, selector_boton, timeout=5000, descripcion="botón Aceptar cookies"):
+                    if ComponenteInteraccion.clickComponente(
+                        page, selector_boton, descripcion="botón Aceptar cookies", intentos=2, timeout=3000):
+                        LogManager.escribir_log("SUCCESS", f"✅ Botón 'Aceptar' cookies clickeado exitosamente")
+                        boton_clickeado = True
+                        esperarConLoaderSimple(1, "Esperando cierre del modal de cookies")
+                        break
+            except Exception as e:
+                LogManager.escribir_log("DEBUG", f"Selector {selector_boton} no funcionó: {str(e)}")
+                continue
+        
+        if not boton_clickeado:
+            LogManager.escribir_log("INFO", "No se encontró el modal de cookies, puede que ya esté cerrado o no apareció")
+        
+        return True
+        
+    except Exception as e:
+        LogManager.escribir_log("WARNING", f"Error cerrando modal de cookies: {str(e)}")
+        # Continuar de todas formas
+        return True
+
 
 @with_timeout_check
 def navegar_a_login(page):
     """Navega a la página de login de JEP"""
     try:
         LogManager.escribir_log("INFO", f"Navegando a: {URLS['login']}")
-        page.goto(URLS['login'])
-
-        # Cerrar cualquier popup inicial
+        LogManager.escribir_log("INFO", "La página puede tardar hasta 85 segundos en cargar, esperando...")
+        
+        # Aumentar timeout para navegación (100 segundos para dar margen)
+        page.goto(URLS['login'], timeout=200000, wait_until="domcontentloaded")
+        LogManager.escribir_log("INFO", "Navegación inicial completada, esperando carga completa...")
+        
+        # Esperar a que la página cargue completamente (la página tarda ~85 segundos)
         try:
-            ComponenteInteraccion.clickComponenteOpcional(
-                page,
-                "//button[contains(text(), 'Aceptar')]",
-                descripcion="popup inicial",
-                intentos=2,
-                timeout=1000
-            )
-        except Exception:
-            pass
+            # Esperar domcontentloaded con timeout largo
+            page.wait_for_load_state("domcontentloaded", timeout=150000)
+            LogManager.escribir_log("SUCCESS", "Página cargada (domcontentloaded)")
+        except Exception as e:
+            LogManager.escribir_log("WARNING", f"Timeout esperando domcontentloaded, continuando: {str(e)}")
+        
+        # Esperar networkidle con timeout suficiente (puede tardar más después de domcontentloaded)
+        try:
+            page.wait_for_load_state("networkidle", timeout=60000)
+            LogManager.escribir_log("SUCCESS", "Página cargada completamente (networkidle)")
+        except Exception as e:
+            LogManager.escribir_log("WARNING", f"Timeout esperando networkidle, continuando: {str(e)}")
+        
+        esperarConLoaderSimple(3, "Esperando carga completa de la página")
+
+        # PASO 1: Cerrar el modal de cookies si aparece
+        cerrar_modal_cookies(page)
+        
+        esperarConLoaderSimple(1, "Esperando después de cerrar modal de cookies")
 
         return True
 
@@ -778,14 +836,19 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
 
         if registros_existentes:
             for registro in registros_existentes:
+                num_documento_bd_completo = str(registro[0])
                 fecha_bd = str(registro[1])
                 valor_bd = float(registro[2])
                 tipo_bd = str(registro[3])
                 concepto_bd = str(registro[4]) if registro[4] else ""
 
-                # Crear combinación única: fecha + valor + tipo + concepto (más preciso)
-                # Esta combinación determina si es el mismo registro
-                clave_combinacion = f"{fecha_bd}|{valor_bd}|{tipo_bd}|{concepto_bd[:50]}"
+                # Extraer número base (sin sufijo) para la combinación
+                # Esto permite que coincidan registros con mismo base pero diferentes sufijos
+                num_documento_bd_base = extraer_numero_documento_base(num_documento_bd_completo)
+
+                # Crear combinación única usando el número BASE: numDocumentoBase + fecha + valor + tipo + concepto
+                # Usar el número base permite detectar duplicados incluso si tienen sufijos diferentes (_1, _2, etc.)
+                clave_combinacion = f"{num_documento_bd_base}|{fecha_bd}|{valor_bd}|{tipo_bd}|{concepto_bd[:50]}"
                 combinaciones_existentes.add(clave_combinacion)
         else:
             LogManager.escribir_log(
@@ -837,24 +900,7 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
                 prefijo = CONFIG_JEP['prefijo_tecnicentro'] if cuenta == NUM_CUENTA_TECNICENTRO else ""
                 descripcion_final = f"{prefijo}{descripcion}".strip()
 
-                clave_combinacion_archivo = f"{fecha_convertida}|{valor}|{tipo_trx}|{descripcion_final[:50]}"
-
-                # PASO 1: Verificar si ya existe por combinación (fecha+valor+tipo+concepto)
-                # Si la combinación existe, es el mismo registro, omitir
-                if clave_combinacion_archivo in combinaciones_existentes:
-                    movimientos_omitidos += 1
-                    LogManager.escribir_log(
-                        "DEBUG", f"📋 Movimiento omitido (combinación duplicada en BD): {fecha_convertida} - ${valor} - {tipo_trx}")
-                    continue
-
-                # Verificar si ya se procesó en memoria (mismo archivo)
-                if clave_combinacion_archivo in combinaciones_procesadas_memoria:
-                    movimientos_omitidos += 1
-                    LogManager.escribir_log(
-                        "DEBUG", f"📋 Movimiento omitido (duplicado en archivo): {fecha_convertida} - ${valor} - {tipo_trx}")
-                    continue
-
-                # PASO 2: Procesar número de documento
+                # PASO 1: Procesar número de documento BASE primero (necesario para la combinación)
                 if num_documento_raw and num_documento_raw.strip():
                     num_documento_base = num_documento_raw.strip()
                 else:
@@ -867,11 +913,31 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
                     saldo_codigo = str(saldo).replace('.', '').replace(',', '')
                     num_documento_base = f"{fecha_codigo}{tipo_codigo}{concepto_codigo}{agencia_codigo}{monto_codigo}{saldo_codigo}G"
 
+                # Crear combinación única usando el número BASE (sin sufijo): numDocumentoBase + fecha + valor + tipo + concepto
+                # Usar el número base permite detectar duplicados incluso si en BD tienen sufijos (_1, _2, etc.)
+                # El numDocumento es crítico para diferenciar registros con mismos datos pero diferentes documentos
+                clave_combinacion_archivo = f"{num_documento_base}|{fecha_convertida}|{valor}|{tipo_trx}|{descripcion_final[:50]}"
+
+                # PASO 2: Verificar si ya existe por combinación completa (usando número base)
+                # Si la combinación existe, es el mismo registro, omitir (incluso si en BD tiene sufijo _1, _2, etc.)
+                if clave_combinacion_archivo in combinaciones_existentes:
+                    movimientos_omitidos += 1
+                    LogManager.escribir_log(
+                        "DEBUG", f"📋 Movimiento omitido (combinación duplicada en BD): {num_documento_base} - {fecha_convertida} - ${valor} - {tipo_trx}")
+                    continue
+
+                # Verificar si ya se procesó en memoria (mismo archivo)
+                if clave_combinacion_archivo in combinaciones_procesadas_memoria:
+                    movimientos_omitidos += 1
+                    LogManager.escribir_log(
+                        "DEBUG", f"📋 Movimiento omitido (duplicado en archivo): {num_documento_base} - {fecha_convertida} - ${valor} - {tipo_trx}")
+                    continue
+
                 # PASO 3: Obtener contador de fecha
                 cont_fecha = obtener_contador_fecha(
                     cuenta, empresa, fecha_convertida)
 
-                # PASO 4: Asegurar número de documento único
+                # PASO 4: Asegurar número de documento único (para PRIMARY KEY)
                 # Si el número de documento ya existe pero la combinación es diferente,
                 # agregar sufijo para diferenciarlo
                 num_documento_final = asegurar_numero_unico(
@@ -880,7 +946,7 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
                 # Si se agregó un sufijo, loguear la razón
                 if num_documento_final != num_documento_base:
                     LogManager.escribir_log(
-                        "DEBUG", f"📝 Número de documento con sufijo: {num_documento_base} -> {num_documento_final} (número duplicado pero combinación diferente)")
+                        "DEBUG", f"📝 Número de documento con sufijo: {num_documento_base} -> {num_documento_final} (número base duplicado, agregando sufijo para PRIMARY KEY)")
 
                 # VERIFICACIÓN FINAL: Asegurar que el documento final no existe antes de insertar
                 # Esto previene errores de PRIMARY KEY (numCuenta, banco, numDocumento)
@@ -928,6 +994,7 @@ def procesar_archivo_excel(ruta_archivo, id_ejecucion, empresa_posicion):
                         # Agregar a los sets de memoria para evitar duplicados en el mismo procesamiento
                         documentos_procesados_en_memoria.add(num_documento_final)
                         documentos_existentes_en_bd.add(num_documento_final)  # Actualizar también el set de BD
+                        # Usar la combinación con numDocumento base para verificación de duplicados
                         combinaciones_procesadas_memoria.add(clave_combinacion_archivo)
 
                         LogManager.escribir_log(
@@ -1085,6 +1152,36 @@ def asegurar_numero_unico(num_documento_base, documentos_bd, documentos_memoria)
 # ==================== FUNCIONES AUXILIARES ====================
 
 
+def extraer_numero_documento_base(num_documento):
+    """
+    Extrae el número de documento base (sin sufijo) de un numDocumento.
+    Ejemplos:
+    - '9550' -> '9550'
+    - '9550_1' -> '9550'
+    - '9550_2' -> '9550'
+    """
+    try:
+        if not num_documento:
+            return ""
+        
+        num_doc_str = str(num_documento).strip()
+        
+        # Si tiene sufijo (formato: base_sufijo), extraer solo la base
+        if "_" in num_doc_str:
+            # Dividir por el último "_" para obtener la base
+            partes = num_doc_str.rsplit("_", 1)
+            # Verificar que la segunda parte sea numérica (sufijo)
+            if len(partes) == 2 and partes[1].isdigit():
+                return partes[0]
+        
+        # Si no tiene sufijo, retornar tal cual
+        return num_doc_str
+    except Exception as e:
+        LogManager.escribir_log(
+            "WARNING", f"Error extrayendo número base de '{num_documento}': {str(e)}")
+        return str(num_documento) if num_documento else ""
+
+
 def habilitar_campo_si_es_necesario(page, selector):
     """Habilita un campo si está deshabilitado"""
     try:
@@ -1240,6 +1337,255 @@ def limpiar_valor_monetario(valor_str):
     except (ValueError, TypeError):
         return 0.0
 
+# ==================== FUNCIONES DE PROCESAMIENTO MANUAL ====================
+
+
+def identificar_empresa_desde_archivo(ruta_archivo):
+    """Identifica la empresa desde un archivo Excel de JEP"""
+    try:
+        contenido = LectorArchivos.leerExcel(ruta_archivo)
+        if contenido is None or len(contenido) < 5:
+            return None, None
+        
+        # Extraer empresa (celda A5, índice 4)
+        empresa = ""
+        if len(contenido) > 4 and len(contenido[4]) > 0:
+            empresa = str(contenido[4][0]) if contenido[4][0] else ""
+        
+        # Extraer cuenta (celda A4, índice 3)
+        cuenta = ""
+        if len(contenido) > 3 and len(contenido[3]) > 0:
+            cuenta_raw = str(contenido[3][0]) if contenido[3][0] else ""
+            cuenta = cuenta_raw.split(":")[1].strip() if ":" in cuenta_raw else cuenta_raw.strip()
+        
+        # Identificar tipo de empresa
+        empresa_normalizada = empresa.upper().strip() if empresa else ""
+        cuenta_normalizada = cuenta.strip() if cuenta else ""
+        
+        # Verificar si es Tecnicentro por cuenta
+        if cuenta_normalizada == NUM_CUENTA_TECNICENTRO:
+            return "AUTOLLANTA TECNICENTRO", cuenta_normalizada
+        
+        # Verificar por nombre de empresa
+        if "AUTOLLANTA" in empresa_normalizada and "TECNICENTRO" in empresa_normalizada:
+            return "AUTOLLANTA TECNICENTRO", cuenta_normalizada
+        elif "AUTOLLANTA" in empresa_normalizada:
+            return "AUTOLLANTA", cuenta_normalizada
+        elif "MAXXIMUNDO" in empresa_normalizada:
+            return "MAXXIMUNDO", cuenta_normalizada
+        
+        # Si no se identifica, retornar el nombre original
+        return empresa, cuenta_normalizada
+        
+    except Exception as e:
+        LogManager.escribir_log(
+            "ERROR", f"Error identificando empresa desde archivo {ruta_archivo}: {str(e)}")
+        return None, None
+
+
+def buscar_archivos_jep_en_descargas():
+    """Busca archivos Excel de JEP en la carpeta de descargas por nombres específicos"""
+    try:
+        carpeta_descargas = RUTAS_CONFIG['descargas']
+        if not os.path.exists(carpeta_descargas):
+            LogManager.escribir_log(
+                "ERROR", f"La carpeta de descargas no existe: {carpeta_descargas}")
+            return []
+        
+        # Mapeo de nombres de archivo a empresas (ordenados de más específico a menos específico)
+        nombres_archivos = [
+            ('jepAutollantaT', 'AUTOLLANTA TECNICENTRO'),  # Más específico primero
+            ('jepAutollanta', 'AUTOLLANTA'),
+            ('jepMaxximundo', 'MAXXIMUNDO')
+        ]
+        
+        archivos_encontrados = []
+        archivos_procesados = set()  # Para evitar procesar el mismo archivo dos veces
+        
+        # Buscar archivos por nombre específico (ordenados de más específico a menos)
+        for nombre_base, empresa_nombre in nombres_archivos:
+            # Buscar archivos que empiecen con el nombre base (puede tener extensión .xlsx o .xls)
+            for archivo in os.listdir(carpeta_descargas):
+                # Evitar procesar archivos ya asignados
+                if archivo in archivos_procesados:
+                    continue
+                    
+                archivo_lower = archivo.lower()
+                nombre_base_lower = nombre_base.lower()
+                
+                # Verificar coincidencia exacta del nombre base (sin extensión)
+                nombre_sin_ext = os.path.splitext(archivo_lower)[0]
+                
+                # Verificar si el nombre del archivo (sin extensión) coincide exactamente con el nombre base
+                if nombre_sin_ext == nombre_base_lower and archivo_lower.endswith(('.xlsx', '.xls')):
+                    ruta_completa = os.path.join(carpeta_descargas, archivo)
+                    
+                    # Verificar que el archivo existe y es válido
+                    if os.path.isfile(ruta_completa):
+                        # Obtener cuenta desde el archivo para validación
+                        _, cuenta = identificar_empresa_desde_archivo(ruta_completa)
+                        
+                        archivos_encontrados.append({
+                            'ruta': ruta_completa,
+                            'nombre': archivo,
+                            'empresa': empresa_nombre,
+                            'cuenta': cuenta
+                        })
+                        archivos_procesados.add(archivo)  # Marcar como procesado
+                        LogManager.escribir_log(
+                            "SUCCESS", f"✅ Archivo encontrado: {archivo} -> Empresa: {empresa_nombre}, Cuenta: {cuenta}")
+                        break  # Solo tomar el primer archivo que coincida con el nombre
+        
+        return archivos_encontrados
+        
+    except Exception as e:
+        LogManager.escribir_log(
+            "ERROR", f"Error buscando archivos JEP: {str(e)}")
+        return []
+
+
+def procesar_archivos_manuales():
+    """Procesa archivos de JEP manualmente desde la carpeta de descargas"""
+    try:
+        LogManager.escribir_log("INFO", "=" * 60)
+        LogManager.escribir_log("INFO", "📁 MODO MANUAL: Procesamiento de archivos JEP")
+        LogManager.escribir_log("INFO", "=" * 60)
+        
+        # Obtener ID de ejecución
+        id_ejecucion = obtenerIDEjecucion()
+        LogManager.iniciar_proceso(NOMBRE_BANCO, id_ejecucion, f"Procesamiento Manual JEP - ID: {id_ejecucion}")
+        
+        # Registrar inicio de ejecución
+        sql_inicio = f"""
+            INSERT INTO {DATABASE_RUNS} (idAutomationRun, processName, startDate, finalizationStatus) 
+            VALUES ({id_ejecucion}, 'Procesamiento Manual JEP', SYSDATETIME(), 'Running')
+        """
+        datosEjecucion(sql_inicio)
+        escribirLog(
+            f"Iniciando procesamiento manual {NOMBRE_BANCO}", id_ejecucion, "INFO", "INICIO")
+        
+        # Buscar archivos en la carpeta de descargas
+        LogManager.escribir_log(
+            "INFO", "🔍 Buscando archivos con nombres específicos:")
+        LogManager.escribir_log(
+            "INFO", "   - jepAutollanta.xlsx (o .xls) -> Autollanta")
+        LogManager.escribir_log(
+            "INFO", "   - jepAutollantaT.xlsx (o .xls) -> Autollanta Tecnicentro")
+        LogManager.escribir_log(
+            "INFO", "   - jepMaxximundo.xlsx (o .xls) -> Maxximundo")
+        
+        archivos = buscar_archivos_jep_en_descargas()
+        
+        if not archivos:
+            LogManager.escribir_log(
+                "ERROR", "No se encontraron archivos Excel de JEP en la carpeta de descargas")
+            LogManager.escribir_log(
+                "ERROR", "Asegúrate de que los archivos tengan los nombres: jepAutollanta, jepAutollantaT, jepMaxximundo")
+            return False
+        
+        # Empresas objetivo
+        empresas_objetivo = {
+            "AUTOLLANTA": None,
+            "AUTOLLANTA TECNICENTRO": None,
+            "MAXXIMUNDO": None
+        }
+        
+        # Identificar archivos por empresa
+        for archivo_info in archivos:
+            empresa = archivo_info['empresa']
+            if empresa in empresas_objetivo:
+                if empresas_objetivo[empresa] is None:
+                    empresas_objetivo[empresa] = archivo_info
+                    LogManager.escribir_log(
+                        "SUCCESS", f"✅ Archivo identificado para {empresa}: {archivo_info['nombre']}")
+                else:
+                    LogManager.escribir_log(
+                        "WARNING", f"⚠️ Múltiples archivos encontrados para {empresa}, usando el primero")
+        
+        # Procesar cada empresa
+        empresas_procesadas = 0
+        empresas_exitosas = 0
+        
+        # Mapeo de empresas a nombres de archivo esperados
+        nombres_esperados = {
+            "AUTOLLANTA": "jepAutollanta",
+            "AUTOLLANTA TECNICENTRO": "jepAutollantaT",
+            "MAXXIMUNDO": "jepMaxximundo"
+        }
+        
+        for empresa_nombre, archivo_info in empresas_objetivo.items():
+            if archivo_info is None:
+                nombre_esperado = nombres_esperados.get(empresa_nombre, "desconocido")
+                LogManager.escribir_log(
+                    "WARNING", f"⚠️ No se encontró archivo para {empresa_nombre} (buscar: {nombre_esperado}.xlsx o .xls)")
+                continue
+            
+            empresas_procesadas += 1
+            LogManager.escribir_log("INFO", "=" * 60)
+            LogManager.escribir_log(
+                "INFO", f"🔄 Procesando {empresa_nombre} desde archivo: {archivo_info['nombre']}")
+            LogManager.escribir_log("INFO", "=" * 60)
+            
+            # Determinar posición para el procesamiento (solo para compatibilidad con la función existente)
+            posicion = "manual"
+            
+            # Procesar archivo
+            if procesar_archivo_excel(archivo_info['ruta'], id_ejecucion, posicion):
+                empresas_exitosas += 1
+                LogManager.escribir_log(
+                    "SUCCESS", f"✅ {empresa_nombre} procesada exitosamente")
+            else:
+                LogManager.escribir_log(
+                    "ERROR", f"❌ Error procesando {empresa_nombre}")
+        
+        # Resumen final
+        LogManager.escribir_log("INFO", "=" * 60)
+        LogManager.escribir_log("INFO", "📊 RESUMEN PROCESAMIENTO MANUAL")
+        LogManager.escribir_log("INFO", "=" * 60)
+        LogManager.escribir_log(
+            "INFO", f"📁 Archivos encontrados: {len(archivos)}")
+        LogManager.escribir_log(
+            "INFO", f"🔄 Empresas procesadas: {empresas_procesadas}")
+        LogManager.escribir_log(
+            "INFO", f"✅ Empresas exitosas: {empresas_exitosas}")
+        LogManager.escribir_log("INFO", "=" * 60)
+        
+        # Actualizar estado en BD
+        if empresas_exitosas > 0:
+            estado_final = "Exitoso" if empresas_exitosas == empresas_procesadas else "Parcial"
+            sql_exito = f"""
+                UPDATE {DATABASE_RUNS} 
+                SET endDate = SYSDATETIME(), finalizationStatus = '{estado_final}'
+                WHERE idAutomationRun = {id_ejecucion}
+            """
+            datosEjecucion(sql_exito)
+            escribirLog(
+                f"Procesamiento manual {NOMBRE_BANCO} completado: {empresas_exitosas}/{empresas_procesadas} empresas exitosas",
+                id_ejecucion, "SUCCESS", "FIN")
+            
+            # Ejecutar BAT para subir movimientos al portal
+            LogManager.escribir_log("INFO", "🔧 Ejecutando proceso final...")
+            SubprocesoManager.ejecutar_bat_final()
+            
+            return True
+        else:
+            sql_error = f"""
+                UPDATE {DATABASE_RUNS} 
+                SET endDate = SYSDATETIME(), finalizationStatus = 'Error'
+                WHERE idAutomationRun = {id_ejecucion}
+            """
+            datosEjecucion(sql_error)
+            escribirLog(
+                f"Error: Procesamiento manual {NOMBRE_BANCO} falló",
+                id_ejecucion, "ERROR", "FIN")
+            return False
+            
+    except Exception as e:
+        LogManager.escribir_log(
+            "ERROR", f"❌ Error en procesamiento manual: {str(e)}")
+        return False
+
+
 # ==================== FUNCIÓN PRINCIPAL ====================
 
 
@@ -1341,9 +1687,9 @@ def main():
                 "INFO", f"🔄 Procesando cuenta {i+1}/{len(credenciales_banco)}: {usuario}")
             LogManager.escribir_log("INFO", "=" * 40)
 
-            # Inicializar Playwright
+            # Inicializar Playwright con timeout aumentado (la página tarda ~85 segundos)
             manager = PlaywrightManager(
-                headless=False, download_path=RUTAS_CONFIG['descargas'])
+                headless=False, download_path=RUTAS_CONFIG['descargas'], timeout=100000)
             playwright, browser, context, page = manager.iniciar_navegador()
 
             try:
@@ -1475,15 +1821,36 @@ def main():
 
 if __name__ == "__main__":
     try:
-        exito = main()
-        if exito:
-            LogManager.escribir_log(
-                "SUCCESS", f"Robot {NOMBRE_BANCO} finalizado exitosamente")
-            sys.exit(0)
+        # Verificar si se solicita modo manual
+        modo_manual = False
+        if len(sys.argv) > 1:
+            if sys.argv[1] in ['--manual', '-m', 'manual']:
+                modo_manual = True
+                LogManager.escribir_log(
+                    "INFO", "🔧 Modo manual activado: Procesando archivos desde carpeta de descargas")
+        
+        if modo_manual:
+            # Procesar archivos manualmente
+            exito = procesar_archivos_manuales()
+            if exito:
+                LogManager.escribir_log(
+                    "SUCCESS", f"Procesamiento manual {NOMBRE_BANCO} finalizado exitosamente")
+                sys.exit(0)
+            else:
+                LogManager.escribir_log(
+                    "ERROR", f"Procesamiento manual {NOMBRE_BANCO} finalizado con errores")
+                sys.exit(1)
         else:
-            LogManager.escribir_log(
-                "ERROR", f"Robot {NOMBRE_BANCO} finalizado con errores")
-            sys.exit(1)
+            # Ejecutar proceso normal
+            exito = main()
+            if exito:
+                LogManager.escribir_log(
+                    "SUCCESS", f"Robot {NOMBRE_BANCO} finalizado exitosamente")
+                sys.exit(0)
+            else:
+                LogManager.escribir_log(
+                    "ERROR", f"Robot {NOMBRE_BANCO} finalizado con errores")
+                sys.exit(1)
     except KeyboardInterrupt:
         LogManager.escribir_log(
             "WARNING", f"Robot {NOMBRE_BANCO} interrumpido por el usuario")

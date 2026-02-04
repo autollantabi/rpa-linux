@@ -218,46 +218,68 @@ def realizar_login_completo(page, timestamp_inicio=None):
 
         # Esperar un momento breve para que se procese el clic
         esperarConLoaderSimple(2, "Esperando procesamiento del login")
-       
-        # Buscar el código en el correo inmediatamente después de hacer clic en Ingresar
-        asunto_correo = "Código para ingresar a tu Banca Empresas"
-        LogManager.escribir_log("INFO", f"Buscando código de seguridad en el correo con asunto: '{asunto_correo}'...")
-        if timestamp_inicio:
-            LogManager.escribir_log("INFO", f"Usando timestamp de inicio del programa: {timestamp_inicio.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-        codigo = CorreoManager.obtener_codigo_correo(
-            asunto=asunto_correo,
-            timestamp_inicio=timestamp_inicio,
-        )
 
-        if codigo and re.fullmatch(r"^\d{6}$", codigo):
-            LogManager.escribir_log(
-                "SUCCESS", f"Código válido recibido: {codigo}")
-
-            # Escribir cada dígito en su campo correspondiente
-            for i, digito in enumerate(codigo):
-                selector_input = f"//input[@id='cb-otp__input-{i}-securityCode']"
-
-                ComponenteInteraccion.escribirComponente(
-                    page,
-                    selector_input,
-                    digito,
-                    descripcion=f"código seguridad dígito {i+1}"
+        # Primero: comprobar si aparece el diálogo de sesión guardada (botón Aceptar en p-dialog-footer).
+        # Si aparece, hacer clic en Aceptar y saltar la búsqueda e ingreso del código.
+        modal_aceptar_selector = "//p-dialog//div[contains(@class,'p-dialog-footer')]//button[.//span[contains(text(),'Aceptar')]]"
+        if ComponenteInteraccion.clickComponenteOpcional(
+            page,
+            modal_aceptar_selector,
+            descripcion="diálogo sesión guardada (Aceptar)",
+            intentos=2,
+            timeout=5000
+        ):
+            LogManager.escribir_log("INFO", "Se encontró diálogo de sesión guardada; clic en Aceptar. Se omite código de seguridad.")
+        else:
+            # No había diálogo de Aceptar: comprobar si se muestran los inputs del código OTP
+            if ComponenteInteraccion.esperarElemento(
+                page,
+                "//input[@id='cb-otp__input-0-securityCode']",
+                timeout=8000,
+                descripcion="inputs de código de seguridad"
+            ):
+                # Buscar el código en el correo e ingresarlo
+                asunto_correo = "Código para ingresar a tu Banca Empresas"
+                LogManager.escribir_log("INFO", f"Buscando código de seguridad en el correo con asunto: '{asunto_correo}'...")
+                if timestamp_inicio:
+                    LogManager.escribir_log("INFO", f"Usando timestamp de inicio del programa: {timestamp_inicio.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                codigo = CorreoManager.obtener_codigo_correo(
+                    asunto=asunto_correo,
+                    timestamp_inicio=timestamp_inicio,
                 )
 
-            # Manejo de diálogos opcionales
-            ComponenteInteraccion.clickComponente(
-                page,
-                "//button[.//span[contains(text(), 'Continuar')]]",
-                descripcion="diálogo confirmación",
-                intentos=2,
-                timeout=3000
-            )
-            # Manejar diálogos posteriores
-            esperarConLoaderSimple(2, "Procesando código de seguridad")
+                if codigo and re.fullmatch(r"^\d{6}$", codigo):
+                    LogManager.escribir_log(
+                        "SUCCESS", f"Código válido recibido: {codigo}")
 
-        else:
-            raise Exception(
-                "No se pudo validar código de seguridad después de todos los intentos")
+                    # Escribir cada dígito en su campo correspondiente
+                    for i, digito in enumerate(codigo):
+                        selector_input = f"//input[@id='cb-otp__input-{i}-securityCode']"
+
+                        ComponenteInteraccion.escribirComponente(
+                            page,
+                            selector_input,
+                            digito,
+                            descripcion=f"código seguridad dígito {i+1}"
+                        )
+
+                    # Manejo de diálogos opcionales
+                    ComponenteInteraccion.clickComponente(
+                        page,
+                        "//button[.//span[contains(text(), 'Continuar')]]",
+                        descripcion="diálogo confirmación",
+                        intentos=2,
+                        timeout=3000
+                    )
+                    # Manejar diálogos posteriores
+                    esperarConLoaderSimple(2, "Procesando código de seguridad")
+
+                else:
+                    raise Exception(
+                        "No se pudo validar código de seguridad después de todos los intentos")
+            else:
+                raise Exception(
+                    "No se encontró el diálogo de sesión guardada (Aceptar) ni los campos de código de seguridad. Comprobar el estado del login.")
 
         # Manejar posibles diálogos o ventanas emergentes
         ComponenteInteraccion.clickComponenteOpcional(
@@ -413,12 +435,7 @@ def navegar_a_movimientos(page):
         
         # Múltiples selectores para "Consultar movimientos" basados en el HTML de cb-menu-table
         selectores_movimientos = [
-            "//div[contains(@class, 'cb-menu-table__item')]//img[@alt='menu-corporate.accounts.movementsInquiry.menu']//ancestor::div[contains(@class, 'cb-menu-table__item')]",
             "//div[contains(@class, 'cb-menu-table__item-container')]//div[contains(@class, 'cb-menu-table__title') and contains(text(), 'Consultar movimientos')]",
-            "//div[contains(@class, 'cb-menu-table__title') and contains(text(), 'Consultar movimientos')]",
-            "//div[contains(@class, 'cb-menu-table__item')]//div[contains(@class, 'cb-menu-table__title') and contains(text(), 'Consultar movimientos')]",
-            "//img[@alt='menu-corporate.accounts.movementsInquiry.menu']//ancestor::div[contains(@class, 'cb-menu-table__item')]",
-            "//div[contains(text(), 'Consultar movimientos')]",
         ]
         
         movimientos_clickeado = False
@@ -486,7 +503,7 @@ def cerrar_modal_seguridad(page):
         for selector_iframe in selectores_iframe:
             try:
                 LogManager.escribir_log("INFO", f"Buscando iframe con selector: {selector_iframe}")
-                if ComponenteInteraccion.esperarElemento(page, selector_iframe, timeout=3000, descripcion="iframe modal"):
+                if ComponenteInteraccion.esperarElemento(page, selector_iframe, timeout=3000, descripcion="iframe modal", intentos=2):
                     # Obtener el frame_locator
                     iframe_encontrado = page.locator(selector_iframe).first
                     frame_locator = page.frame_locator(selector_iframe).first

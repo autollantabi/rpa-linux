@@ -308,7 +308,7 @@ def iniciar_sesion(page):
             esperarConLoader(2, "Esperando respuesta del login")
 
             ComponenteInteraccion.clickComponente(
-                page, "//a[@data-ng-click='Confirmar(true)']", descripcion="botón aceptar login")
+                page, "//a[@data-ng-click='Confirmar(true)']", descripcion="botón aceptar login", intentos=2 )
 
             LogManager.escribir_log(
                 "SUCCESS", f"Login exitoso para: {usuario}")

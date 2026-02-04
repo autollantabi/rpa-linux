@@ -1654,7 +1654,7 @@ def main():
         # Registrar inicio de ejecución
         sql_inicio = f"""
             INSERT INTO {DATABASE_RUNS} (idAutomationRun, processName, startDate, finalizationStatus) 
-            VALUES ({id_ejecucion}, 'Descarga comprobantes-Banco Guayaquil', SYSDATETIME(), 'Running')
+            VALUES ({id_ejecucion}, 'Descarga comprobantes-Cooperativa JEP', SYSDATETIME(), 'Running')
         """
         datosEjecucion(sql_inicio)
         escribirLog(

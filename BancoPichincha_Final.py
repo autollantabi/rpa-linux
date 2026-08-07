@@ -1446,7 +1446,7 @@ def main():
 
         # Crear manager de navegador
         manager = PlaywrightManager(
-            headless=False,  # Cambiar a True para modo headless
+            headless=True,  # Cambiar a True para modo headless
             download_path=RUTAS_CONFIG['descargas'],
             timeout=30000
         )

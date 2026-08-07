@@ -3,7 +3,7 @@
 BANCO Pichincha - PROCESAMIENTO DE ARCHIVOS CSV OPTIMIZADO
 Versión optimizada del procesador original usando componentes comunes
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import os
 import re
@@ -93,13 +93,29 @@ def safe_float(valor):
     except Exception:
         return 0.0
 
+def obtener_base_y_sufijo(num_doc):
+    """
+    Dada una cadena de número de documento (posiblemente con sufijo),
+    retorna una tupla (base, sufijo_entero).
+    Soporta formatos: "1234567890", "1234567890-1", "1234567890 - 1"
+    """
+    num_doc = num_doc.strip()
+    if '-' in num_doc:
+        parts = num_doc.rsplit('-', 1)
+        base = parts[0].strip()
+        sufijo_str = parts[1].strip()
+        if sufijo_str.isdigit():
+            return base, int(sufijo_str)
+    return num_doc, 0
+
+
 def obtener_documentos_con_mismo_numero_base(num_base, documentos_bd):
     """Obtiene documentos existentes con el mismo número base"""
     documentos_encontrados = []
     for doc_bd in documentos_bd:
         num_doc_bd_completo = doc_bd["numDocumento"].strip()
-        num_base_bd = num_doc_bd_completo.split(' - ')[0].strip()
-        if num_base_bd == num_base:
+        base, _ = obtener_base_y_sufijo(num_doc_bd_completo)
+        if base == num_base:
             documentos_encontrados.append(num_doc_bd_completo)
     return documentos_encontrados
 
@@ -110,7 +126,7 @@ def movimiento_ya_existe(documento, fecha_sql, monto, saldo, tipo, documentos_bd
     """
     for doc_bd in documentos_bd:
         num_doc_bd_completo = doc_bd["numDocumento"].strip()
-        num_base_bd = num_doc_bd_completo.split(' - ')[0].strip()
+        num_base_bd, _ = obtener_base_y_sufijo(num_doc_bd_completo)
         if (
             num_base_bd == documento and
             doc_bd.get("fechaTransaccion") == fecha_sql and
@@ -142,6 +158,7 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
 
         movimientos_insertados = 0
         movimientos_omitidos = 0
+        consultas_a_insertar = []
 
         for i, fila in enumerate(registros[1:], start=2):
             try:
@@ -157,11 +174,17 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
 
                 # Convertir fecha a YYYY-MM-DD
                 try:
-                    fecha_sql = datetime.strptime(
-                        fecha, "%d/%m/%Y").strftime("%Y-%m-%d")
+                    fecha_obj = datetime.strptime(fecha, "%d/%m/%Y")
+                    fecha_sql = fecha_obj.strftime("%Y-%m-%d")
                 except Exception:
                     LogManager.escribir_log(
                         "WARNING", f"Fila {i}: Fecha inválida: {fecha}")
+                    continue
+
+                # Validar que la fecha sea mayor a 30 días antes de la fecha actual
+                fecha_limite = (datetime.now() - timedelta(days=30)).date()
+                if fecha_obj.date() <= fecha_limite:
+                    movimientos_omitidos += 1
                     continue
 
                 # Verificar duplicados
@@ -212,16 +235,12 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
                 if documentos_existentes:
                     mayor_sufijo = 0
                     for doc_existente in documentos_existentes:
-                        if ' - ' in doc_existente:
-                            try:
-                                sufijo_existente = int(doc_existente.split(' - ')[1])
-                                mayor_sufijo = max(mayor_sufijo, sufijo_existente)
-                            except (ValueError, IndexError):
-                                pass
+                        _, sufijo_existente = obtener_base_y_sufijo(doc_existente)
+                        mayor_sufijo = max(mayor_sufijo, sufijo_existente)
                     sufijo = mayor_sufijo + 1
-                    numDocumento_final = f"{documento} - {sufijo}"
+                    numDocumento_final = f"{documento}-{sufijo}"
 
-                # Insertar en base de datos
+                # Preparar consulta de inserción
                 sql_insert = f"""
                     INSERT INTO {DATABASE}
                     (numCuenta, banco, empresa, numDocumento, idEjecucion, fechaTransaccion,
@@ -233,16 +252,26 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
                             saldo}, '{oficina}', '{concepto}'
                     )
                 """
-                if BaseDatos.ejecutarSQL(sql_insert):
-                    movimientos_insertados += 1
-                else:
-                    movimientos_omitidos += 1
+                consultas_a_insertar.append(sql_insert)
 
             except Exception as e:
                 LogManager.escribir_log(
                     "WARNING", f"Error procesando fila {i}: {str(e)}")
                 movimientos_omitidos += 1
                 continue
+
+        # Validar si el archivo es posiblemente incorrecto (0 omitidos)
+        if movimientos_omitidos == 0:
+            LogManager.escribir_log(
+                "WARNING", f"El archivo {os.path.basename(ruta_csv)} posiblemente esté incorrecto (0 omitidos), no se insertará.")
+            return False
+
+        # Si pasa la validación, procedemos a insertar
+        for sql_insert in consultas_a_insertar:
+            if BaseDatos.ejecutarSQL(sql_insert):
+                movimientos_insertados += 1
+            else:
+                movimientos_omitidos += 1
 
         return {
             "empresa": empresa,

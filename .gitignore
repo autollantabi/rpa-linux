@@ -1,0 +1,28 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+
+# Logs y salidas del RPA
+logs/
+*.log
+descargas/
+downloads/
+debug_*.png
+
+# Credenciales y configuración sensible
+*.env
+.env
+credenciales*.csv
+config/*.csv
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store

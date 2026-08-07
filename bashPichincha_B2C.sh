@@ -29,7 +29,7 @@ check_xvfb() {
 cleanup() {
     echo "🧹 Limpiando procesos..."
     pkill -f "Xvfb :99" 2>/dev/null
-    pkill -f "python.BancoProdubanco" 2>/dev/null
+    pkill -f "python.*BancoPichincha_B2C" 2>/dev/null
 }
 
 # Configurar trap para limpieza
@@ -47,16 +47,16 @@ if ! check_xvfb; then
     exit 1
 fi
 
-echo "🚀 Iniciando automatización en modo headless..."
+echo "🚀 Iniciando automatización B2C en modo headless..."
 
-# Ejecutar el script con timeout de 5 minutos
-timeout 900 python BancoProdubanco_Final.py
+# Ejecutar el script con timeout de 20 minutos (B2C puede ser más lento)
+timeout 1200 python BancoPichincha_B2C_Final.py
 
 # Capturar código de salida
 exit_code=$?
 
 if [ $exit_code -eq 124 ]; then
-    echo "⏰ ERROR: El proceso fue terminado por timeout (5 minutos)"
+    echo "⏰ ERROR: El proceso fue terminado por timeout (20 minutos)"
 elif [ $exit_code -eq 0 ]; then
     echo "✅ Proceso completado exitosamente"
 else

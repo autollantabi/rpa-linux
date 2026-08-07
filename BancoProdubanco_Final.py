@@ -23,8 +23,6 @@ from componentes_comunes import (
     CorreoManager,
     ConfiguracionManager,
     SubprocesoManager,
-    esperarConLoader,
-    esperarConLoaderSimple,
     RUTAS_CONFIG
 )
 
@@ -34,7 +32,7 @@ from componentes_comunes import (
 class TimeoutManager:
     """Maneja timeouts globales de manera automática"""
 
-    def __init__(self, timeout_seconds=600):
+    def __init__(self, timeout_seconds=300):
         self.timeout_seconds = timeout_seconds
         self.start_time = None
         self.timer = None
@@ -86,7 +84,7 @@ class TimeoutManager:
 
 
 # Instancia global del timeout manager
-timeout_manager = TimeoutManager(600)  # 10 minutos
+timeout_manager = TimeoutManager(900)  # 5 minutos
 
 
 def with_timeout_check(func):
@@ -169,12 +167,25 @@ def navegar_a_login(page):
     """Navega a la página de login de Produbanco"""
     try:
         LogManager.escribir_log("INFO", f"Navegando a: {URLS['login']}")
-        page.goto(URLS['login'])
-        page.wait_for_load_state("networkidle")
+        # Aumentar timeout y usar load state menos restrictivo
+        page.goto(URLS['login'], timeout=120000)  # 2 minutos
+        # Esperar que la página esté cargada sin networkidle (más flexible)
+        page.wait_for_load_state("domcontentloaded", timeout=60000)
+        # Esperar un poco más para que los elementos estén listos
+        EsperasInteligentes.esperar_con_loader_simple(5, "Esperando carga completa de página")
+        
         return True
 
     except Exception as e:
         LogManager.escribir_log("ERROR", f"Error navegando a login: {str(e)}")
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            os.makedirs(f"{RUTAS_CONFIG['logs']}/screenshots", exist_ok=True)
+            screenshot_path = f"{RUTAS_CONFIG['logs']}/screenshots/error_navegar_login_{timestamp}.png"
+            page.screenshot(path=screenshot_path)
+            LogManager.escribir_log("INFO", f"Screenshot de error navegando a login guardado: {screenshot_path}")
+        except:
+            pass
         return False
 
 
@@ -186,7 +197,7 @@ def navegar_a_movimientos(page):
 
         # Esperar carga completa de la página
         EsperasInteligentes.esperar_carga_pagina(page)
-        esperarConLoaderSimple(3, "Esperando carga de página principal")
+        EsperasInteligentes.esperar_con_loader_simple(3, "Esperando carga de página principal")
 
         # PASO 1: Buscar y hacer clic en Cash Management
         selector_cash_management = "//span[contains(@class, 'ng-binding') and text()='Cash Management']"
@@ -256,7 +267,8 @@ def navegar_a_movimientos(page):
         # Debug: screenshot de error
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            screenshot_path = f"{RUTAS_CONFIG['descargas']}/error_navegacion_produbanco_{timestamp}.png"
+            os.makedirs(f"{RUTAS_CONFIG['logs']}/screenshots", exist_ok=True)
+            screenshot_path = f"{RUTAS_CONFIG['logs']}/screenshots/error_navegacion_produbanco_{timestamp}.png"
             page.screenshot(path=screenshot_path)
             LogManager.escribir_log(
                 "INFO", f"Screenshot de error guardado: {screenshot_path}")
@@ -270,7 +282,6 @@ def navegar_a_movimientos(page):
 def iniciar_sesion(page):
     """Inicia sesión en la plataforma de Produbanco"""
     try:
-
         # Leer credenciales del banco
         credenciales_banco = LectorArchivos.leerCSV(
             RUTAS_CONFIG['credenciales_banco'],
@@ -296,17 +307,26 @@ def iniciar_sesion(page):
             LogManager.escribir_log(
                 "INFO", f"Intento de login {intento}/{max_intentos}")
 
-            # Escribir credenciales
+            # Escribir credenciales usando selectores proporcionados
+            selector_usuario = "//input[@id='username']"
+            selector_password = "//input[@id='password']"
+            
+            LogManager.escribir_log("INFO", "Escribiendo usuario...")
             ComponenteInteraccion.escribirComponente(
-                page, "#username", usuario, descripcion="usuario")
+                page, selector_usuario, usuario, descripcion="usuario")
+            
+            LogManager.escribir_log("INFO", "Escribiendo contraseña...")
             ComponenteInteraccion.escribirComponente(
-                page, "#password", password, descripcion="password")
+                page, selector_password, password, descripcion="password")
 
             # Hacer click en submit
+            LogManager.escribir_log("INFO", "Haciendo clic en botón de login...")
             ComponenteInteraccion.clickComponente(
                 page, "#submit", descripcion="botón login")
-            esperarConLoader(2, "Esperando respuesta del login")
+            
+            EsperasInteligentes.esperar_con_loader_simple(2, "Esperando respuesta del login")
 
+            # Intentar hacer clic en botón de confirmación si existe
             ComponenteInteraccion.clickComponente(
                 page, "//a[@data-ng-click='Confirmar(true)']", descripcion="botón aceptar login", intentos=2 )
 
@@ -316,10 +336,28 @@ def iniciar_sesion(page):
 
         LogManager.escribir_log(
             "ERROR", f"Login falló después de {max_intentos} intentos")
+        
+        # Guardar captura en caso de error de login
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = f"{RUTAS_CONFIG['logs']}/screenshots/error_login_{timestamp}.png"
+            page.screenshot(path=screenshot_path)
+            LogManager.escribir_log("INFO", f"Screenshot de error de login guardado: {screenshot_path}")
+        except Exception as se:
+            LogManager.escribir_log("WARNING", f"No se pudo tomar screenshot de error de login: {str(se)}")
+
         return False
 
     except Exception as e:
         LogManager.escribir_log("ERROR", f"Error al iniciar sesión: {str(e)}")
+        # Guardar captura en caso de excepción en login
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = f"{RUTAS_CONFIG['logs']}/screenshots/error_login_excep_{timestamp}.png"
+            page.screenshot(path=screenshot_path)
+            LogManager.escribir_log("INFO", f"Screenshot de error de inicio de sesión guardado: {screenshot_path}")
+        except Exception as se:
+            LogManager.escribir_log("WARNING", f"No se pudo tomar screenshot de error de login: {str(se)}")
         return False
 
 # ==================== FUNCIONES DE CONSULTA ====================
@@ -342,6 +380,14 @@ def obtener_y_procesar_movimientos(page, id_ejecucion):
     except Exception as e:
         LogManager.escribir_log(
             "ERROR", f"Error obteniendo movimientos: {str(e)}")
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            os.makedirs(f"{RUTAS_CONFIG['logs']}/screenshots", exist_ok=True)
+            screenshot_path = f"{RUTAS_CONFIG['logs']}/screenshots/error_obtener_movimientos_{timestamp}.png"
+            page.screenshot(path=screenshot_path)
+            LogManager.escribir_log("INFO", f"Screenshot de error en obtener movimientos guardado: {screenshot_path}")
+        except:
+            pass
         return False
 
 
@@ -366,7 +412,7 @@ def obtener_y_seleccionar_empresas(page, id_ejecucion):
             return False
 
         # Esperar que el select tenga opciones cargadas
-        esperarConLoaderSimple(2, "Esperando carga de opciones de empresas")
+        EsperasInteligentes.esperar_con_loader_simple(2, "Esperando carga de opciones de empresas")
 
         # Obtener todas las opciones del select - CORRECCIÓN AQUÍ
         try:
@@ -428,6 +474,14 @@ def obtener_y_seleccionar_empresas(page, id_ejecucion):
     except Exception as e:
         LogManager.escribir_log(
             "ERROR", f"Error en obtener y seleccionar empresas: {str(e)}")
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            os.makedirs(f"{RUTAS_CONFIG['logs']}/screenshots", exist_ok=True)
+            screenshot_path = f"{RUTAS_CONFIG['logs']}/screenshots/error_seleccionar_empresas_{timestamp}.png"
+            page.screenshot(path=screenshot_path)
+            LogManager.escribir_log("INFO", f"Screenshot de error en obtener y seleccionar empresas guardado: {screenshot_path}")
+        except:
+            pass
         return False
 
 
@@ -456,12 +510,14 @@ def procesar_empresa_individual(page, nombre_empresa, id_ejecucion):
         ComponenteInteraccion.clickComponente(
             page, selector_ejecutar, descripcion=f"botón ejecutar consulta", intentos=1, timeout=3000)
 
-        esperarConLoader(6, f"Ejecutando consulta para {nombre_empresa}")
+        # Aumentar tiempo de espera para que se procese la consulta
+        EsperasInteligentes.esperar_con_loader(10, f"Ejecutando consulta para {nombre_empresa}")
 
         # PASO 4: Verificar que hay resultados y descargar Excel
-        selector_descarga = "//a[@data-ng-click=\"exportar('excel')\"]"
+        selector_descarga = "//a[contains(@class, 'btn-xls') and contains(@data-ng-click, \"exportar('excel')\")]"
 
-        if not ComponenteInteraccion.esperarElemento(page, selector_descarga, timeout=5000, descripcion=f"botón descargar"):
+        # Esperar que el botón de descarga aparezca con un timeout más generoso
+        if not ComponenteInteraccion.esperarElemento(page, selector_descarga, timeout=10000, descripcion=f"botón descargar"):
             LogManager.escribir_log(
                 "WARNING", f"No se encontraron datos para descargar en empresa: {nombre_empresa}")
             # Actualizar fechas incluso cuando no hay datos, ya que es normal
@@ -474,6 +530,14 @@ def procesar_empresa_individual(page, nombre_empresa, id_ejecucion):
     except Exception as e:
         LogManager.escribir_log(
             "ERROR", f"Error procesando empresa individual {nombre_empresa}: {str(e)}")
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            os.makedirs(f"{RUTAS_CONFIG['logs']}/screenshots", exist_ok=True)
+            screenshot_path = f"{RUTAS_CONFIG['logs']}/screenshots/error_empresa_{nombre_empresa.replace(' ', '_')}_{timestamp}.png"
+            page.screenshot(path=screenshot_path)
+            LogManager.escribir_log("INFO", f"Screenshot de error en empresa {nombre_empresa} guardado: {screenshot_path}")
+        except Exception as se:
+            LogManager.escribir_log("WARNING", f"No se pudo tomar screenshot de error en empresa: {str(se)}")
         return False
 
 
@@ -530,6 +594,78 @@ def configurar_fechas_consulta(page):
         return False
 
 
+def descargar_archivo_produbanco(page, selector_boton, timeout=60000, adicional=""):
+    """
+    Descarga de forma robusta el archivo de movimientos de Produbanco
+    esperando loaders y reintentando sin force=True para auto-esperar overlays.
+    """
+    try:
+        # Esperar presencia del elemento
+        page.wait_for_selector(selector_boton, timeout=15000, state="attached")
+
+        # Intentar esperar que desaparezcan posibles loaders/overlays
+        for loader in [".block-ui-overlay", "div.loading", ".spinner", ".overlay"]:
+            try:
+                page.wait_for_selector(loader, timeout=1500, state="hidden")
+            except:
+                pass
+
+        # Posicionar elemento
+        try:
+            elemento = page.locator(selector_boton).first
+            elemento.scroll_into_view_if_needed()
+            page.wait_for_timeout(1000)
+        except Exception as e:
+            LogManager.escribir_log("WARNING", f"No se pudo hacer scroll al botón de descarga: {str(e)}")
+
+        LogManager.escribir_log("INFO", "Iniciando evento de captura de descarga...")
+        
+        # Click normal primero (permite que Playwright espere a que desaparezcan overlays invisibles)
+        try:
+            with page.expect_download(timeout=timeout) as download_info:
+                page.locator(selector_boton).first.click(timeout=12000)
+            download = download_info.value
+        except Exception as click_err:
+            LogManager.escribir_log("WARNING", f"Click normal falló ({str(click_err)}), reintentando con force=True...")
+            with page.expect_download(timeout=timeout) as download_info:
+                page.locator(selector_boton).first.click(force=True)
+            download = download_info.value
+
+        ruta_temporal = download.path()
+        nombre_archivo = download.suggested_filename
+        nombre = nombre_archivo.split('.')[0]
+        extension = nombre_archivo.split('.')[-1]
+
+        if adicional:
+            nombre_archivo = f"{nombre}_{adicional}.{extension}"
+
+        ruta_descarga = os.path.join(RUTAS_CONFIG['descargas'], nombre_archivo)
+        download.save_as(ruta_descarga)
+
+        # Eliminar temporal
+        try:
+            if os.path.exists(ruta_temporal):
+                os.remove(ruta_temporal)
+        except:
+            pass
+
+        LogManager.escribir_log("SUCCESS", f"Descarga completada exitosamente: {ruta_descarga}")
+        return ruta_descarga
+
+    except Exception as e:
+        LogManager.escribir_log("ERROR", f"Error en descarga robusta de Produbanco: {str(e)}")
+        # Tomar screenshot del error
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            os.makedirs(f"{RUTAS_CONFIG['logs']}/screenshots", exist_ok=True)
+            screenshot_path = f"{RUTAS_CONFIG['logs']}/screenshots/error_descarga_produbanco_{timestamp}.png"
+            page.screenshot(path=screenshot_path)
+            LogManager.escribir_log("INFO", f"Screenshot de error en descarga guardado: {screenshot_path}")
+        except Exception as ex:
+            LogManager.escribir_log("WARNING", f"No se pudo tomar screenshot de error de descarga: {str(ex)}")
+        return None
+
+
 def descargar_y_procesar_archivo_empresa(page, nombre_empresa, id_ejecucion):
     """Descarga el archivo Excel de la empresa y lo procesa"""
     try:
@@ -537,23 +673,38 @@ def descargar_y_procesar_archivo_empresa(page, nombre_empresa, id_ejecucion):
             "INFO", f"Descargando archivo para empresa: {nombre_empresa}")
 
         # Selectores para el botón de descarga
-        selector_descarga = "//a[@data-ng-click=\"exportar('excel')\"]"
+        selector_descarga = "//a[contains(@class, 'btn-xls') and contains(@data-ng-click, \"exportar('excel')\")]"
 
         # Generar adicional con fecha/hora y primeras letras de empresa
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         prefijo_empresa = nombre_empresa[:2].upper() if len(nombre_empresa) >= 2 else "XX"
         adicional_nombre = f"{prefijo_empresa}_{timestamp}"
 
-        ruta_archivo = ComponenteInteraccion.esperarDescarga(
-            page,
-            selector_descarga,
-            timeout=30000,
-            descripcion=f"botón descargar",
-            adicional=adicional_nombre
-        )
+        # Lógica de reintento para la descarga
+        ruta_archivo = None
+        for intento in range(2):
+            if intento > 0:
+                LogManager.escribir_log("WARNING", f"Reintentando descarga para {nombre_empresa} (intento {intento + 1})")
+                page.wait_for_timeout(3000)
+                # Intentar forzar la visibilidad por si acaso
+                try:
+                    page.locator(selector_descarga).scroll_into_view_if_needed()
+                except:
+                    pass
+
+            ruta_archivo = descargar_archivo_produbanco(
+                page,
+                selector_descarga,
+                timeout=60000,
+                adicional=adicional_nombre
+            )
+            
+            if ruta_archivo:
+                break
+
         if not ruta_archivo:
             LogManager.escribir_log(
-                "ERROR", f"No se pudo descargar archivo para empresa: {nombre_empresa}")
+                "ERROR", f"No se pudo descargar archivo para empresa: {nombre_empresa} tras varios intentos")
             return False
 
         # Procesar archivo descargado usando la función existente
@@ -932,8 +1083,67 @@ def main():
 
         # Inicializar Playwright
         manager = PlaywrightManager(
-            headless=False, download_path=RUTAS_CONFIG['descargas'])
+            headless=True, download_path=RUTAS_CONFIG['descargas'])
         playwright, browser, context, page = manager.iniciar_navegador()
+        
+        # Añadir medidas anti-detección
+        LogManager.escribir_log("INFO", "Aplicando medidas anti-detección...")
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            delete navigator.__proto__.webdriver;
+            
+            window.chrome = {
+                runtime: {},
+                loadTimes: () => {},
+                csi: () => {}
+            };
+            
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+            
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => ({
+                    0: { type: 'application/pdf' },
+                    length: 1
+                }),
+            });
+            
+            Object.defineProperty(navigator, 'mimeTypes', {
+                get: () => ({
+                    0: { type: 'application/pdf' },
+                    length: 1
+                }),
+            });
+            
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['es-ES', 'es', 'en-US', 'en'],
+            });
+            
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                if (parameter === 37445) return 'Google Inc.';
+                if (parameter === 37446) return 'ANGLE (NVIDIA GeForce GTX 1080 Ti Direct3D11 vs_5_0 ps_5_0)';
+                return getParameter(parameter);
+            };
+            
+            Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+            Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
+            Object.defineProperty(screen, 'width', { get: () => 1920 });
+            Object.defineProperty(screen, 'height', { get: () => 1080 });
+            Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+            Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+            
+            Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+            Object.defineProperty(navigator, 'productSub', { get: () => '20030107' });
+            Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+            Object.defineProperty(navigator, 'vendorSub', { get: () => '' });
+        """)
 
         try:
             # Navegar a login
@@ -1035,3 +1245,4 @@ if __name__ == "__main__":
         LogManager.escribir_log(
             "ERROR", f"Error fatal en robot {NOMBRE_BANCO}: {str(e)}")
         sys.exit(1)
+    

@@ -375,7 +375,7 @@ class ComponenteInteraccion:
             
 
             with page.expect_download(timeout=timeout) as download_info:
-                page.click(selector_boton)
+                page.click(selector_boton, force=True)
 
             download = download_info.value
 
@@ -1167,7 +1167,18 @@ class LogManager:
             print(f"[{cls._banco_actual}] {linea_log.strip()}")
 
         except Exception as e:
-            print(f"Error escribiendo log: {e}")
+            try:
+                # Intentar en un directorio local "logs" como alternativa por si no hay permisos
+                local_logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+                if not os.path.exists(local_logs_dir):
+                    os.makedirs(local_logs_dir)
+                local_ruta_archivo = os.path.join(local_logs_dir, nombre_archivo)
+                with open(local_ruta_archivo, 'a', encoding='utf-8') as local_archivo_log:
+                    local_archivo_log.write(linea_log)
+                print(f"[{cls._banco_actual}] (Log local fallback: {local_ruta_archivo}) {linea_log.strip()}")
+            except Exception as e_inner:
+                print(f"Error escribiendo log en ruta principal ({e}) y fallback ({e_inner})")
+                print(f"[{cls._banco_actual}] {linea_log.strip()}")
 
     @classmethod
     def iniciar_proceso(cls, banco, idEjecucion, descripcion="Proceso iniciado"):

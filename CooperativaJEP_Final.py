@@ -1689,7 +1689,7 @@ def main():
 
             # Inicializar Playwright con timeout aumentado (la página tarda ~85 segundos)
             manager = PlaywrightManager(
-                headless=False, download_path=RUTAS_CONFIG['descargas'], timeout=100000)
+                headless=True, download_path=RUTAS_CONFIG['descargas'], timeout=100000)
             playwright, browser, context, page = manager.iniciar_navegador()
 
             try:

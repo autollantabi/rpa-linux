@@ -1,4 +1,9 @@
 #!/bin/bash
+# bash_pichincha.sh
+# Ejecuta la automatización de Banco Pichincha en modo "headless real"
+# (navegador visible pero sin pantalla física, vía Xvfb) — necesario porque
+# Chrome con reCAPTCHA/Akamai se comporta distinto en --headless real y
+# puede ser detectado más fácil.
 
 # Configurar variables de entorno para headless
 export DISPLAY=:99
@@ -11,10 +16,9 @@ check_xvfb() {
         return 0
     else
         echo "🚀 Iniciando Xvfb en :99"
-        # Configuración mejorada para Xvfb
         Xvfb :99 -screen 0 $XVFB_WHD -ac +extension GLX +render -noreset -dpi 96 2>/dev/null &
         sleep 3
-        
+
         if pgrep -f "Xvfb :99" > /dev/null; then
             echo "✅ Xvfb iniciado correctamente"
             return 0
@@ -29,16 +33,14 @@ check_xvfb() {
 cleanup() {
     echo "🧹 Limpiando procesos..."
     pkill -f "Xvfb :99" 2>/dev/null
-    pkill -f "python.*BancoPichincha" 2>/dev/null
+    pkill -f "python.*session.py" 2>/dev/null
 }
-
-# Configurar trap para limpieza
 trap cleanup EXIT
 
-# Cambiar al directorio
-cd /home/administrador/Escritorio/bancos || exit 1
+# --- AJUSTA ESTA RUTA a donde tengas el proyecto ---
+cd /home/administrador/Escritorio/bancos/BancoPichincha || exit 1
 
-# Activar entorno virtual
+# Activar entorno virtual (ajusta la ruta si tu venv está en otro lado)
 source ../venv/bin/activate || exit 1
 
 # Verificar/iniciar Xvfb
@@ -47,12 +49,13 @@ if ! check_xvfb; then
     exit 1
 fi
 
-echo "🚀 Iniciando automatización en modo headless..."
+echo "🚀 Iniciando automatización (Banco Pichincha)..."
 
-# Ejecutar el script con timeout de 15 minutos
-timeout 900 python BancoPichincha_Final.py
+# Ejecutar el script principal con timeout de 15 minutos.
+# El 2FA ahora se resuelve por Telegram — el bot te va a escribir al chat
+# configurado en .env pidiendo el código, y tú le respondes ahí mismo.
+timeout 900 python session.py
 
-# Capturar código de salida
 exit_code=$?
 
 if [ $exit_code -eq 124 ]; then

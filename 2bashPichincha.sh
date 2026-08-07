@@ -1,4 +1,3 @@
-
 # Cambiar al directorio
 cd /home/administrador/Escritorio/bancos || exit 1
 

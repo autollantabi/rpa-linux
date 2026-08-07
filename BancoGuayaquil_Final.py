@@ -624,10 +624,10 @@ def realizar_login_completo(page, timestamp_inicio=None):
             timeout=3000
         )
         # Manejar posibles diálogos o ventanas emergentes
-        ComponenteInteraccion.clickComponente(
+        ComponenteInteraccion.clickComponenteOpcional(
             page,
             "//button[.//span[contains(text(), 'Ir a mi Resumen')]]",
-            descripcion="diálogo de confirmación",
+            descripcion="botón Ir a mi Resumen",
             intentos=2,
             timeout=3000
         )
@@ -646,8 +646,12 @@ def realizar_login_completo(page, timestamp_inicio=None):
 def cerrar_iframe_inicial(page):
     """Cierra el iframe que aparece antes de buscar el menú Cuentas"""
     try:
-        LogManager.escribir_log(
-            "INFO", "Buscando iframe inicial (antes de menú Cuentas)...")
+        if page.locator("iframe").count() == 0:
+            LogManager.escribir_log(
+                "INFO", "No hay iframes en la página, omitiendo búsqueda de modal")
+            return True
+
+        LogManager.escribir_log("INFO", "Buscando iframe inicial...")
 
         # Esperar un momento para que aparezca el iframe
         esperarConLoaderSimple(2, "Esperando aparición del iframe inicial")
@@ -684,7 +688,8 @@ def cerrar_iframe_inicial(page):
             return True
 
         # Esperar carga completa del iframe
-        esperarConLoaderSimple(2, "Esperando carga completa del iframe inicial")
+        esperarConLoaderSimple(
+            2, "Esperando carga completa del iframe inicial")
 
         # Buscar el botón X dentro del iframe
         LogManager.escribir_log(
@@ -839,6 +844,11 @@ def obtener_y_procesar_movimientos(page, id_ejecucion):
 
 
 def cerrar_modal_seguridad(page):
+
+    if page.locator("iframe").count() == 0:
+        LogManager.escribir_log("INFO", "No hay iframes en la página, omitiendo búsqueda de modal")
+        return True
+
     """Cierra el modal/iframe de seguridad que aparece después de entrar en Consulta de movimientos"""
     try:
         LogManager.escribir_log("INFO", "Buscando modal de seguridad (iframe)...")

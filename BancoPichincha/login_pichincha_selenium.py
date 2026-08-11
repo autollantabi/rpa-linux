@@ -55,6 +55,7 @@ def crear_driver(headless=False, ruta_descargas=None):
 
     opciones.add_argument("--disable-blink-features=AutomationControlled")
     opciones.add_argument("--disable-dev-shm-usage")  # evita crashes de renderer por memoria compartida limitada
+    opciones.add_argument("--no-sandbox")  # Chrome se niega a iniciar corriendo como root sin esto
     opciones.add_argument("--start-maximized")
     opciones.add_argument("--disable-infobars")
     opciones.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -350,6 +351,8 @@ if __name__ == "__main__":
 
     USUARIO = credenciales_banco[0][1]
     PASSWORD = credenciales_banco[0][2]
+
+    print(USUARIO, PASSWORD)
 
     # Carpeta local donde se van a guardar los CSVs descargados
     RUTA_DESCARGAS = os.path.join(os.getcwd(), "descargas_pichincha")

@@ -2,11 +2,11 @@
 """
 selenium_utils.py
 
-Helpers compartidos por login_pichincha_selenium.py, descargar_movimientos.py
-y sesion_persistente.py: clics/esperas robustas, y un cierre de modales
-bloqueantes que atraviesa shadow DOM (los componentes del banco son web
-components, así que un clic normal de Selenium no siempre llega al botón
-real).
+Helpers compartidos por login_pichincha_selenium.py, download_by_api.py,
+descargar_movimientos.py y sesion_persistente.py: clics/esperas robustas, y
+un cierre de modales bloqueantes que atraviesa shadow DOM (los componentes
+del banco son web components, así que un clic normal de Selenium no siempre
+llega al botón real).
 """
 import time
 from selenium.webdriver.common.by import By
@@ -42,10 +42,33 @@ def esperar_visible(driver, by, selector, timeout=TIMEOUT_DEFECTO, descripcion="
         raise Exception(f"No se encontró/visible '{descripcion or selector}' tras {timeout}s")
 
 
-# JS que busca un elemento por texto exacto ATRAVESANDO shadow DOM (recursivo
-# por cada shadowRoot que encuentre) y le dispara un evento de clic real.
-# Devuelve true si encontró y clickeó algo.
-_JS_BUSCAR_Y_CLICKEAR = """
+# --- Helper JS reutilizado: comprueba visibilidad REAL (no solo presencia
+# en el DOM) — Angular a veces deja el contenedor del modal montado y
+# oculto con display:none en vez de destruirlo, y contarlo como "modal
+# activo" causaba bucles inútiles buscando un botón que ya no aplicaba.
+_JS_ES_VISIBLE = """
+    function esVisible(el) {
+        if (!el) return false;
+        const estilo = window.getComputedStyle(el);
+        return estilo.display !== 'none' && estilo.visibility !== 'hidden' && el.offsetParent !== null;
+    }
+"""
+
+_JS_HAY_MODAL = _JS_ES_VISIBLE + """
+    const candidatos = document.querySelectorAll(
+        '.modal.wrapper, .modal__background, ngx-guided-tour .tour-step'
+    );
+    for (const el of candidatos) {
+        if (esVisible(el)) return true;
+    }
+    return false;
+"""
+
+# Busca un botón por texto exacto, ATRAVESANDO shadow DOM, pero SOLO dentro
+# de contenedores de modal que estén realmente visibles — así no le pega
+# por accidente a un botón suelto en cualquier otra parte de la página que
+# comparta el mismo texto (ej. un "Cerrar" de un filtro no relacionado).
+_JS_BUSCAR_Y_CLICKEAR = _JS_ES_VISIBLE + """
     function buscarEnRoot(root, textos) {
         const candidatos = root.querySelectorAll('*');
         for (const el of candidatos) {
@@ -62,11 +85,14 @@ _JS_BUSCAR_Y_CLICKEAR = """
         }
         return false;
     }
-    return buscarEnRoot(document, arguments[0]);
-"""
 
-_JS_HAY_MODAL = """
-    return document.querySelector('.modal.wrapper, .modal__background, ngx-guided-tour .tour-step') !== null;
+    const contenedoresModal = document.querySelectorAll('.modal.wrapper, ngx-guided-tour');
+    for (const contenedor of contenedoresModal) {
+        if (esVisible(contenedor)) {
+            if (buscarEnRoot(contenedor, arguments[0])) return true;
+        }
+    }
+    return false;
 """
 
 _JS_OCULTAR_MODAL_FORZADO = """
@@ -85,10 +111,10 @@ def cerrar_modales_bloqueantes(driver, timeout=15, intervalo=1.5,
     diálogos de sesión) que puedan aparecer sobre la pantalla.
 
     Reintenta durante `timeout` segundos buscando un botón con alguno de
-    `textos_botones` — la búsqueda atraviesa shadow DOM, así que encuentra
-    botones aunque estén dentro de web components (pichincha-old-button,
-    etc.), donde un `.click()` normal de Selenium a veces no llega al
-    control real.
+    `textos_botones` — la búsqueda atraviesa shadow DOM y está limitada a
+    contenedores de modal REALMENTE VISIBLES, así que no confunde un
+    contenedor vacío/oculto que Angular dejó montado con un modal activo,
+    ni clickea botones sueltos de otras partes de la página.
 
     Si después del timeout el modal sigue ahí (no se encontró ningún botón
     reconocible), lo oculta por la fuerza vía JS como último recurso, para

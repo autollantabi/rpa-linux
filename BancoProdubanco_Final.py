@@ -253,8 +253,17 @@ def navegar_a_movimientos(page):
 
             raise Exception("No se pudo hacer clic en 'Movimientos de Cuenta'")
 
-        # Verificar que se cargó correctamente
-        page.wait_for_load_state("networkidle", timeout=15000)
+        # Verificar que se cargó correctamente. Usamos "domcontentloaded" en
+        # vez de "networkidle": esta SPA tiene tráfico de fondo continuo
+        # (polling/heartbeat de sesión) que nunca deja la red en verdadero
+        # reposo, así que "networkidle" siempre termina agotando el timeout
+        # aunque la página ya esté lista e interactiva (mismo patrón que ya
+        # se usa en navegar_a_login).
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            LogManager.escribir_log(
+                "WARNING", "Timeout esperando domcontentloaded tras navegar a movimientos, se continúa igual")
 
         LogManager.escribir_log(
             "SUCCESS", "Navegación a movimientos completada exitosamente")
@@ -594,10 +603,19 @@ def configurar_fechas_consulta(page):
         return False
 
 
-def descargar_archivo_produbanco(page, selector_boton, timeout=60000, adicional=""):
+def descargar_archivo_produbanco(page, selector_boton, adicional=""):
     """
-    Descarga de forma robusta el archivo de movimientos de Produbanco
-    esperando loaders y reintentando sin force=True para auto-esperar overlays.
+    Descarga de forma robusta el archivo de movimientos de Produbanco.
+
+    Prueba 3 estrategias de clic en cascada sobre el botón de descarga:
+      1. Clic normal de Playwright (rápido, cubre la mayoría de los casos).
+      2. Clic disparado por JavaScript (dispatchEvent) directo sobre el
+         nodo — no depende de coordenadas de pantalla, así que no lo puede
+         tapar un overlay/loader invisible que ya terminó pero no se
+         desmontó del DOM (la causa más probable de la intermitencia
+         original, donde ni el clic normal ni el force=True disparaban el
+         evento de descarga).
+      3. force=True como último recurso.
     """
     try:
         # Esperar presencia del elemento
@@ -619,17 +637,51 @@ def descargar_archivo_produbanco(page, selector_boton, timeout=60000, adicional=
             LogManager.escribir_log("WARNING", f"No se pudo hacer scroll al botón de descarga: {str(e)}")
 
         LogManager.escribir_log("INFO", "Iniciando evento de captura de descarga...")
-        
-        # Click normal primero (permite que Playwright espere a que desaparezcan overlays invisibles)
+
+        download = None
+        ultimo_error = None
+
+        # Estrategia 1: clic normal de Playwright (rapido, funciona la
+        # mayoria de las veces; respeta actionability checks).
         try:
-            with page.expect_download(timeout=timeout) as download_info:
+            with page.expect_download(timeout=30000) as download_info:
                 page.locator(selector_boton).first.click(timeout=12000)
             download = download_info.value
         except Exception as click_err:
-            LogManager.escribir_log("WARNING", f"Click normal falló ({str(click_err)}), reintentando con force=True...")
-            with page.expect_download(timeout=timeout) as download_info:
-                page.locator(selector_boton).first.click(force=True)
-            download = download_info.value
+            ultimo_error = click_err
+            LogManager.escribir_log(
+                "WARNING", f"Clic normal fallo ({str(click_err)}), probando clic por JS (dispatchEvent)...")
+
+        # Estrategia 2: clic disparado por JavaScript directo sobre el nodo
+        # (dispatchEvent). A diferencia de un clic "normal" o "force=True"
+        # de Playwright, que en el fondo siguen actuando sobre coordenadas
+        # de pantalla, esto no depende de que haya visualmente encima del
+        # boton (ej. un loader invisible que ya termino pero no se desmonto
+        # del DOM todavia). Va directo al elemento, sin importar tapado.
+        if download is None:
+            try:
+                with page.expect_download(timeout=15000) as download_info:
+                    page.locator(selector_boton).first.evaluate(
+                        "el => el.dispatchEvent(new MouseEvent(\'click\', {bubbles: true, cancelable: true, view: window}))"
+                    )
+                download = download_info.value
+                LogManager.escribir_log("SUCCESS", "Clic por JS (dispatchEvent) funciono")
+            except Exception as js_err:
+                ultimo_error = js_err
+                LogManager.escribir_log(
+                    "WARNING", f"Clic por JS tambien fallo ({str(js_err)}), probando force=True como ultimo recurso...")
+
+        # Estrategia 3: force=True como ultimo recurso.
+        if download is None:
+            try:
+                with page.expect_download(timeout=15000) as download_info:
+                    page.locator(selector_boton).first.click(force=True)
+                download = download_info.value
+            except Exception as force_err:
+                ultimo_error = force_err
+
+        if download is None:
+            raise ultimo_error or Exception("No se pudo disparar la descarga con ninguna estrategia de clic")
 
         ruta_temporal = download.path()
         nombre_archivo = download.suggested_filename
@@ -695,7 +747,6 @@ def descargar_y_procesar_archivo_empresa(page, nombre_empresa, id_ejecucion):
             ruta_archivo = descargar_archivo_produbanco(
                 page,
                 selector_descarga,
-                timeout=60000,
                 adicional=adicional_nombre
             )
             
@@ -1245,4 +1296,3 @@ if __name__ == "__main__":
         LogManager.escribir_log(
             "ERROR", f"Error fatal en robot {NOMBRE_BANCO}: {str(e)}")
         sys.exit(1)
-    

@@ -14,28 +14,88 @@ usualmente horas/días de inactividad), sí va a hacer falta un login
 interactivo nuevo — eso no se puede evitar, es la frontera de seguridad
 real del banco.
 
-Uso típico (recomendado — download_by_api maneja su propio refresh):
-    from sesion_persistente import SesionPichincha
-    from download_by_api import descargar_todas_las_empresas_api
-
-    sesion = SesionPichincha(usuario, password, ruta_descargas="./reportes")
-    sesion.iniciar()                                      # login una sola vez
-    descargar_todas_las_empresas_api(sesion.driver, "./reportes")
-    sesion.cerrar()
-
-Uso alterno (si necesitas el token/uuid crudo para llamadas con `requests`
-fuera del navegador, ej. a los endpoints de /companies o /accounts que NO
-están detrás de Akamai — ver descargar_reportes_bancarios.py):
-    token, uuid = sesion.token_vigente()   # se refresca solo si hace falta
+Logging: igual que el resto de bancos (Produbanco, JEP, Guayaquil), este
+script escribe a archivo vía LogManager (RUTAS_CONFIG['logs']) y registra
+cada corrida en las tablas compartidas AutomationRun/AutomationLog.
 """
+import os
+import sys
 import time
+import subprocess
 from datetime import datetime, timedelta
 
-from componentes_comunes import (LectorArchivos, RUTAS_CONFIG)
+from componentes_comunes import (
+    LectorArchivos,
+    RUTAS_CONFIG,
+    LogManager,
+    BaseDatos,
+)
 from login_pichincha_selenium import crear_driver, login_pichincha
-from download_by_api import obtener_sesion_api
+from download_by_api import obtener_sesion_api, descargar_todas_las_empresas_api
 
 VIGENCIA_TOKEN_SEGUNDOS = 240  # el JWT dura ~300s; refrescamos con margen
+
+# ==================== CONFIGURACIÓN GLOBAL (mismo patrón que Produbanco) ====================
+
+DATABASE_RUNS = "AutomationRun"
+DATABASE_LOGS = "AutomationLog"
+NOMBRE_BANCO = "Banco Pichincha"
+
+RUTA_DESCARGAS = RUTAS_CONFIG.get('pichincha', "/home/administrador/configBancos/Pichincha")
+RUTA_SCRIPT_PROCESAMIENTO = "/home/administrador/Escritorio/bancos/2BancoPichincha_Final.py"
+
+
+def formatear_tiempo_ejecucion(tiempo_delta):
+    """Formatea un timedelta a string legible"""
+    total_seconds = int(tiempo_delta.total_seconds())
+    minutos = total_seconds // 60
+    segundos = total_seconds % 60
+    return f"{minutos}m {segundos}s"
+
+
+def obtenerIDEjecucion():
+    """Obtiene el siguiente ID de ejecución de la BD (misma tabla compartida
+    AutomationRun que usan Produbanco/JEP/Guayaquil)."""
+    try:
+        sql = f"SELECT MAX(idAutomationRun) FROM {DATABASE_RUNS}"
+        resultado = BaseDatos.consultarBD(sql)
+        if resultado and resultado[0] and resultado[0][0]:
+            return resultado[0][0] + 1
+        return 1
+    except Exception as e:
+        LogManager.escribir_log("ERROR", f"Error obteniendo ID ejecución: {str(e)}")
+        return int(time.time())  # Fallback
+
+
+def datosEjecucion(sql):
+    """Ejecuta una consulta en la BD"""
+    try:
+        BaseDatos.ejecutarSQL(sql)
+        return True
+    except Exception as e:
+        LogManager.escribir_log("ERROR", f"Error ejecutando SQL: {str(e)}")
+        return False
+
+
+def escribirLog(mensaje, id_ejecucion, estado, accion):
+    """
+    Escribe un log en la BD (tabla AutomationLog). Se trunca a 400
+    caracteres porque el mensaje puede traer el stacktrace completo de
+    Selenium/Playwright (varias líneas largas), y la columna processName
+    no tiene espacio para eso — insertar sin truncar produce un error de
+    SQL Server ("datos truncados") que enmascara el error real.
+    """
+    mensaje_una_linea = " ".join(mensaje.split())
+    mensaje_truncado = mensaje_una_linea[:400]
+    texto_limpio = mensaje_truncado.replace("'", "''")
+    sql = f"""
+        INSERT INTO {DATABASE_LOGS} (idAutomationRun, processName, dateLog, statusLog, action)
+        VALUES ({id_ejecucion}, '{texto_limpio}', SYSDATETIME(), '{estado}', '{accion}')
+    """
+    datosEjecucion(sql)
+
+
+# ==================== SESIÓN PERSISTENTE ====================
 
 
 class SesionPichincha:
@@ -51,7 +111,7 @@ class SesionPichincha:
 
     def iniciar(self, id_ejecucion=1):
         """Login inicial completo (usuario/contraseña + reCAPTCHA + 2FA)."""
-        print("=== Iniciando sesión persistente (login completo, una sola vez) ===")
+        LogManager.escribir_log("INFO", "Iniciando sesión persistente (login completo, una sola vez)...")
         self.driver = crear_driver(headless=self.headless, ruta_descargas=self.ruta_descargas)
         login_pichincha(self.driver, self.usuario, self.password, id_ejecucion=id_ejecucion)
 
@@ -61,7 +121,7 @@ class SesionPichincha:
         # Angular bootstraree y dispare esa llamada (ej. a /companies),
         # y ahí sí queda cacheado el token.
         self._refrescar_token(forzar_renovacion_silenciosa=True)
-        print("=== Sesión lista. El navegador queda abierto en segundo plano. ===")
+        LogManager.escribir_log("SUCCESS", "Sesión lista. El navegador queda abierto en segundo plano.")
 
     def _token_esta_vigente(self):
         if not self._token or not self._token_obtenido_en:
@@ -83,11 +143,12 @@ class SesionPichincha:
                     self.driver, forzar_navegacion=forzar_renovacion_silenciosa
                 )
                 self._token_obtenido_en = datetime.now()
-                print(f"  Token actualizado (uuid de sesión: {self._uuid})")
+                LogManager.escribir_log("SUCCESS", f"Token actualizado (uuid de sesión: {self._uuid})")
                 return
             except Exception as e:
                 ultimo_error = e
-                print(f"  Token todavía no disponible (intento {intento}/{intentos}), reintentando...")
+                LogManager.escribir_log(
+                    "WARNING", f"Token todavía no disponible (intento {intento}/{intentos}), reintentando...")
                 time.sleep(espera_entre_intentos)
 
         raise Exception(f"No se pudo obtener el token tras {intentos} intentos: {ultimo_error}")
@@ -109,59 +170,113 @@ class SesionPichincha:
             self.driver = None
 
 
-if __name__ == "__main__":
-    import os
-    import sys
-    import subprocess
-    from download_by_api import descargar_todas_las_empresas_api
+# ==================== FUNCIÓN PRINCIPAL ====================
 
-    # TODO: en producción, lee estas credenciales de un lugar seguro
-    # (variable de entorno, secreto de Windows Credential Manager, etc.)
-    # — no las dejes hardcodeadas como aquí en el archivo final.
-    credenciales_banco = LectorArchivos.leerCSV(
-        RUTAS_CONFIG['credenciales_banco'],
-        filtro_columna=0,
-        valor_filtro="Banco Pichincha"
-    )
 
-    USUARIO = credenciales_banco[0][1]
-    PASSWORD = credenciales_banco[0][2]
+def main():
+    """Función principal del robot Pichincha"""
 
-    print(USUARIO, PASSWORD)
+    id_ejecucion = None
+    inicio_ejecucion = datetime.now()
+    sesion = None
 
-    # Misma carpeta que usa tu script de procesamiento (RUTAS_CONFIG['pichincha'])
-    # — los nombres autollanta.csv/ikonix.csv/maxximundo.csv/stox.csv ya
-    # coinciden con los prefijos que busca obtener_empresa_desde_nombre_archivo().
-    RUTA_DESCARGAS = "/home/administrador/configBancos/Pichincha"
-    os.makedirs(RUTA_DESCARGAS, exist_ok=True)
-
-    # Script que procesa los CSVs descargados (inserta en RegistrosBancos y
-    # sube el BAT final vía SubprocesoManager.ejecutar_bat_final()).
-    RUTA_SCRIPT_PROCESAMIENTO = "/home/administrador/Escritorio/bancos/2BancoPichincha_Final.py"
-
-    sesion = SesionPichincha(USUARIO, PASSWORD, ruta_descargas=RUTA_DESCARGAS)
     try:
-        sesion.iniciar()  # login completo: usuario/contraseña + reCAPTCHA + 2FA
+        # Obtener ID de ejecución (misma tabla compartida que los demás bancos)
+        id_ejecucion = obtenerIDEjecucion()
+
+        LogManager.iniciar_proceso(
+            NOMBRE_BANCO, id_ejecucion, f"Automatización {NOMBRE_BANCO} - ID: {id_ejecucion}")
+
+        sql_inicio = f"""
+            INSERT INTO {DATABASE_RUNS} (idAutomationRun, processName, startDate, finalizationStatus)
+            VALUES ({id_ejecucion}, 'Descarga comprobantes-{NOMBRE_BANCO}', SYSDATETIME(), 'Running')
+        """
+        datosEjecucion(sql_inicio)
+        escribirLog(f"Iniciando automatización {NOMBRE_BANCO}", id_ejecucion, "INFO", "INICIO")
+
+        # Credenciales desde el archivo compartido de credenciales de bancos
+        credenciales_banco = LectorArchivos.leerCSV(
+            RUTAS_CONFIG['credenciales_banco'],
+            filtro_columna=0,
+            valor_filtro=NOMBRE_BANCO
+        )
+        usuario = credenciales_banco[0][1]
+        password = credenciales_banco[0][2]
+
+        os.makedirs(RUTA_DESCARGAS, exist_ok=True)
+
+        sesion = SesionPichincha(usuario, password, ruta_descargas=RUTA_DESCARGAS)
+        sesion.iniciar(id_ejecucion=id_ejecucion)  # login: usuario/contraseña + reCAPTCHA + 2FA
 
         # Descarga los 4 CSVs directo en la carpeta que espera el procesador.
         resultados = descargar_todas_las_empresas_api(sesion.driver, RUTA_DESCARGAS)
 
-        # Si al menos un archivo se descargó bien, dispara el procesamiento
-        # (inserta en la BD y sube el BAT final) usando el MISMO intérprete
-        # de Python (venv) con el que está corriendo este script.
         algun_archivo_ok = any(resultados.values())
         if algun_archivo_ok:
-            print(f"\nDisparando procesamiento: {RUTA_SCRIPT_PROCESAMIENTO}")
+            LogManager.escribir_log("INFO", f"Disparando procesamiento: {RUTA_SCRIPT_PROCESAMIENTO}")
             proceso = subprocess.run(
                 [sys.executable, RUTA_SCRIPT_PROCESAMIENTO],
                 capture_output=True, text=True
             )
-            print(proceso.stdout)
+            if proceso.stdout:
+                LogManager.escribir_log("INFO", proceso.stdout.strip())
             if proceso.returncode != 0:
-                print(f"  Aviso: el procesamiento terminó con código {proceso.returncode}")
-                print(proceso.stderr)
+                LogManager.escribir_log("WARNING", f"El procesamiento terminó con código {proceso.returncode}")
+                if proceso.stderr:
+                    LogManager.escribir_log("WARNING", proceso.stderr.strip())
         else:
-            print("\nNinguna empresa se descargó correctamente — no se dispara el procesamiento.")
+            LogManager.escribir_log(
+                "WARNING", "Ninguna empresa se descargó correctamente — no se dispara el procesamiento.")
+
+        tiempo_total = formatear_tiempo_ejecucion(datetime.now() - inicio_ejecucion)
+        LogManager.escribir_log("SUCCESS", f"✅ {NOMBRE_BANCO} completado exitosamente en {tiempo_total}")
+
+        sql_exito = f"""
+            UPDATE {DATABASE_RUNS}
+            SET endDate = SYSDATETIME(), finalizationStatus = 'Exitoso'
+            WHERE idAutomationRun = {id_ejecucion}
+        """
+        datosEjecucion(sql_exito)
+        escribirLog(f"Automatización {NOMBRE_BANCO} completada exitosamente", id_ejecucion, "SUCCESS", "FIN")
+
+        return True
+
+    except Exception as e:
+        tiempo_total = formatear_tiempo_ejecucion(datetime.now() - inicio_ejecucion)
+        LogManager.escribir_log("ERROR", f"❌ Error en {NOMBRE_BANCO}: {str(e)} (Tiempo: {tiempo_total})")
+
+        if id_ejecucion:
+            sql_error = f"""
+                UPDATE {DATABASE_RUNS}
+                SET endDate = SYSDATETIME(), finalizationStatus = 'Error'
+                WHERE idAutomationRun = {id_ejecucion}
+            """
+            datosEjecucion(sql_error)
+            escribirLog(f"Error en automatización {NOMBRE_BANCO}: {str(e)}", id_ejecucion, "ERROR", "FIN")
+
+        return False
 
     finally:
-        sesion.cerrar()
+        if sesion:
+            sesion.cerrar()
+
+        tiempo_total = formatear_tiempo_ejecucion(datetime.now() - inicio_ejecucion)
+        LogManager.escribir_log("INFO", f"Tiempo total de ejecución: {tiempo_total}")
+        LogManager.escribir_log("INFO", "=" * 60)
+
+
+if __name__ == "__main__":
+    try:
+        exito = main()
+        if exito:
+            LogManager.escribir_log("SUCCESS", f"Robot {NOMBRE_BANCO} finalizado exitosamente")
+            sys.exit(0)
+        else:
+            LogManager.escribir_log("ERROR", f"Robot {NOMBRE_BANCO} finalizado con errores")
+            sys.exit(1)
+    except KeyboardInterrupt:
+        LogManager.escribir_log("WARNING", f"Robot {NOMBRE_BANCO} interrumpido por el usuario")
+        sys.exit(1)
+    except Exception as e:
+        LogManager.escribir_log("ERROR", f"Error fatal en robot {NOMBRE_BANCO}: {str(e)}")
+        sys.exit(1)

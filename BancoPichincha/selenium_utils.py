@@ -13,6 +13,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
+from componentes_comunes import LogManager
 
 TIMEOUT_DEFECTO = 20
 
@@ -134,14 +135,14 @@ def cerrar_modales_bloqueantes(driver, timeout=15, intervalo=1.5,
         clickeado = driver.execute_script(_JS_BUSCAR_Y_CLICKEAR, textos_botones)
         if clickeado:
             algo_cerrado = True
-            print("  Modal cerrado (botón encontrado por texto).")
+            LogManager.escribir_log("SUCCESS", "Modal cerrado (botón encontrado por texto).")
             time.sleep(1)
         else:
             time.sleep(intervalo)
 
     sigue_bloqueado = driver.execute_script(_JS_HAY_MODAL)
     if sigue_bloqueado:
-        print("  Aviso: el modal no se pudo cerrar con clic, ocultándolo por JS como respaldo...")
+        LogManager.escribir_log("WARNING", "El modal no se pudo cerrar con clic, ocultándolo por JS como respaldo...")
         driver.execute_script(_JS_OCULTAR_MODAL_FORZADO)
 
     return algo_cerrado

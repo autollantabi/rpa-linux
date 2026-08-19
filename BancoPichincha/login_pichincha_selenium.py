@@ -31,7 +31,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # Ajusta el import según dónde hayas dejado la carpeta token_web/
 from selenium_utils import cerrar_modales_bloqueantes
 from componentes_comunes import (LectorArchivos, 
-    RUTAS_CONFIG)
+    RUTAS_CONFIG, LogManager)
 import telegram_2fa
 
 URL_LOGIN = "https://bancaempresas.pichincha.com/"
@@ -161,7 +161,7 @@ def escribir_seguro(driver, by, selector, texto, timeout=TIMEOUT_ELEMENTO, descr
         if valor_actual == texto:
             return
         else:
-            print(f"  Aviso: '{descripcion}' quedó como '{valor_actual}', "
+            LogManager.escribir_log("WARNING", f"'{descripcion}' quedó como '{valor_actual}', "
                   f"reintentando ({intento}/{max_intentos})...")
 
     raise Exception(
@@ -175,18 +175,18 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
     Realiza el login completo: usuario/contraseña + espera manual del código 2FA
     a través de la web local (token_web).
     """
-    print("Navegando a la home del banco (dejamos que redirija sola al login)...")
+    LogManager.escribir_log("INFO", "Navegando a la home del banco (dejamos que redirija sola al login)...")
     driver.get(URL_LOGIN)
 
     # La home hace un par de redirecciones (home -> authorize de Azure B2C) antes
     # de que el formulario de usuario/contraseña esté realmente listo. Esperamos
     # a que el campo sea VISIBLE (no solo que exista en el DOM).
-    print("Esperando a que cargue el formulario de login...")
+    LogManager.escribir_log("INFO", "Esperando a que cargue el formulario de login...")
     WebDriverWait(driver, TIMEOUT_ELEMENTO).until(
         EC.visibility_of_element_located((By.ID, "signInName"))
     )
 
-    print("Ingresando usuario y contraseña...")
+    LogManager.escribir_log("INFO", "Ingresando usuario y contraseña...")
     escribir_seguro(driver, By.ID, "signInName", usuario, descripcion="usuario")
     escribir_seguro(driver, By.ID, "password", password, descripcion="password")
 
@@ -195,7 +195,7 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
     # Si pasó, lo reescribimos justo antes de enviar.
     campo_usuario = esperar_y_obtener(driver, By.ID, "signInName", descripcion="usuario (revalidación)")
     if campo_usuario.get_attribute("value") != usuario:
-        print("  El campo usuario se vació tras pasar a contraseña, reescribiendo antes de enviar...")
+        LogManager.escribir_log("WARNING", "El campo usuario se vació tras pasar a contraseña, reescribiendo antes de enviar...")
         escribir_seguro(driver, By.ID, "signInName", usuario, descripcion="usuario", espera_estabilidad=0.3)
 
     # IMPORTANTE: el sitio usa reCAPTCHA Enterprise y solo lo dispara con
@@ -204,7 +204,7 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
     # se generaba al escribir. Lo disparamos manualmente aquí y ESPERAMOS a
     # que el token exista antes del primer clic — así no dependemos de que un
     # clic anterior haya dejado un token cacheado.
-    print("Generando token de reCAPTCHA...")
+    LogManager.escribir_log("INFO", "Generando token de reCAPTCHA...")
     driver.execute_script("if (typeof generateCaptcha === 'function') { generateCaptcha(); }")
     try:
         WebDriverWait(driver, 15).until(
@@ -212,16 +212,16 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
                 "return document.getElementById('g-recaptcha-response-toms')?.value?.length > 0;"
             )
         )
-        print("  Token de reCAPTCHA listo.")
+        LogManager.escribir_log("SUCCESS", "Token de reCAPTCHA listo.")
     except TimeoutException:
-        print("  Aviso: el token de reCAPTCHA no se generó en 15s, se continúa igual "
+        LogManager.escribir_log("WARNING", "El token de reCAPTCHA no se generó en 15s, se continúa igual "
               "(el clic en Ingresar también lo dispara como respaldo).")
 
     # Espera a que el botón esté realmente HABILITADO (no solo presente/clickeable
     # en el DOM). Muchos formularios lo deshabilitan mientras corre una validación
     # interna tras rellenar los campos, y dar clic antes de que se habilite
     # produce un error de submit.
-    print("Esperando a que el botón 'Ingresar' esté habilitado...")
+    LogManager.escribir_log("INFO", "Esperando a que el botón 'Ingresar' esté habilitado...")
     WebDriverWait(driver, TIMEOUT_ELEMENTO).until(
         lambda d: d.find_element(By.ID, "continue").get_attribute("disabled") is None
     )
@@ -246,7 +246,7 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
             pantalla_2fa_cargo = True
             break
 
-        print(f"Clic en 'Ingresar' (intento {intento_login}/{MAX_INTENTOS_LOGIN})...")
+        LogManager.escribir_log("INFO", f"Clic en 'Ingresar' (intento {intento_login}/{MAX_INTENTOS_LOGIN})...")
         click_seguro(driver, By.ID, "continue", descripcion="botón login",
                      timeout=5, opcional=True)
 
@@ -271,7 +271,7 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
                     )
 
             if intento_login < MAX_INTENTOS_LOGIN:
-                print("  La pantalla del token no cargó todavía, reintentando...")
+                LogManager.escribir_log("WARNING", "La pantalla del token no cargó todavía, reintentando...")
                 time.sleep(1.5)
                 continue
 
@@ -282,7 +282,7 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
             "(revisa manualmente esas credenciales) o que haya un captcha/bloqueo adicional."
         )
 
-    print("Pantalla del token confirmada. Enviando aviso por Telegram y "
+    LogManager.escribir_log("INFO", "Pantalla del token confirmada. Enviando aviso por Telegram y "
           f"esperando el código (ejecución #{id_ejecucion})...")
 
     codigo = telegram_2fa.esperar_codigo(
@@ -298,7 +298,7 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
     if not re.fullmatch(r"^\d{6}$", codigo):
         raise Exception(f"Código con formato inválido recibido: '{codigo}'")
 
-    print("Código recibido, ingresándolo en las 6 casillas del Pichincha Token...")
+    LogManager.escribir_log("INFO", "Código recibido, ingresándolo en las 6 casillas del Pichincha Token...")
     # El código no va en un solo campo: son 6 casillas de un dígito cada una
     # (id="oneDigit" ... id="sixDigit"), generadas por la app Pichincha Token.
     for id_casilla, digito in zip(IDS_DIGITOS, codigo):
@@ -306,7 +306,7 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
                         espera_estabilidad=0.3)
 
     # El botón "continue" se habilita solo cuando las 6 casillas están completas.
-    print("Esperando a que el botón 'Ingresar' se habilite tras completar el código...")
+    LogManager.escribir_log("INFO", "Esperando a que el botón 'Ingresar' se habilite tras completar el código...")
     WebDriverWait(driver, TIMEOUT_ELEMENTO).until(
         lambda d: d.find_element(By.ID, "continue").get_attribute("disabled") is None
     )
@@ -332,10 +332,10 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
     # login (el "¿Qué hay de nuevo?", diálogos de sesión, tour guiado...).
     # Si no se cierra, la app puede interpretar la falta de interacción real
     # como inactividad/comportamiento anómalo y cortar la sesión.
-    print("Verificando y cerrando modales bloqueantes si aparecen...")
+    LogManager.escribir_log("INFO", "Verificando y cerrando modales bloqueantes si aparecen...")
     cerrar_modales_bloqueantes(driver, timeout=15)
 
-    print("Login completado.")
+    LogManager.escribir_log("SUCCESS", "Login completado.")
     return True
 
 
@@ -352,8 +352,6 @@ if __name__ == "__main__":
     USUARIO = credenciales_banco[0][1]
     PASSWORD = credenciales_banco[0][2]
 
-    print(USUARIO, PASSWORD)
-
     # Carpeta local donde se van a guardar los CSVs descargados
     RUTA_DESCARGAS = os.path.join(os.getcwd(), "descargas_pichincha")
     os.makedirs(RUTA_DESCARGAS, exist_ok=True)
@@ -361,7 +359,7 @@ if __name__ == "__main__":
     driver = crear_driver(headless=False, ruta_descargas=RUTA_DESCARGAS)
     try:
         login_pichincha(driver, USUARIO, PASSWORD, id_ejecucion=999)
-        print("Login OK. Iniciando descarga de movimientos de las 4 empresas...")
+        LogManager.escribir_log("SUCCESS", "Login OK. Iniciando descarga de movimientos de las 4 empresas...")
 
         # Opción A: por API directa (recomendado — más rápido y estable,
         # sin depender de selectores de UI que puedan cambiar).
@@ -374,6 +372,6 @@ if __name__ == "__main__":
 
         input("Proceso terminado. Presiona Enter para cerrar el navegador...")
     except Exception as e:
-        print(f"Error: {e}")
+        LogManager.escribir_log("ERROR", f"Error: {e}")
     finally:
         driver.quit()

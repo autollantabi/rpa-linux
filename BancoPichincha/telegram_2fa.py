@@ -34,6 +34,7 @@ import re
 import time
 import requests
 from dotenv import load_dotenv
+from componentes_comunes import LogManager
 
 load_dotenv()
 
@@ -71,7 +72,7 @@ def enviar_mensaje(texto, chat_ids=None):
             )
             resp.raise_for_status()
         except Exception as e:
-            print(f"  Aviso: no se pudo enviar el mensaje a chat_id={chat_id}: {e}")
+            LogManager.escribir_log("WARNING", f"No se pudo enviar el mensaje a chat_id={chat_id}: {e}")
 
 
 def _limpiar_actualizaciones_pendientes():
@@ -111,7 +112,7 @@ def esperar_codigo(id_ejecucion=None, banco="Banco Pichincha", timeout_segundos=
         + f".\nResponde en este chat con los 6 dígitos dentro de los próximos {minutos} minutos."
     )
     enviar_mensaje(texto_aviso)
-    print(f"Aviso enviado por Telegram. Esperando respuesta con el código (timeout {minutos} min)...")
+    LogManager.escribir_log("INFO", f"Aviso enviado por Telegram. Esperando respuesta con el código (timeout {minutos} min)...")
 
     offset = None
     inicio = time.time()
@@ -126,7 +127,7 @@ def esperar_codigo(id_ejecucion=None, banco="Banco Pichincha", timeout_segundos=
             resp.raise_for_status()
             resultados = resp.json().get("result", [])
         except Exception as e:
-            print(f"  Aviso: error consultando Telegram ({e}), reintentando...")
+            LogManager.escribir_log("WARNING", f"Error consultando Telegram ({e}), reintentando...")
             time.sleep(intervalo)
             continue
 

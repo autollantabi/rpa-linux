@@ -19,6 +19,7 @@ import json
 import time
 from datetime import date, timedelta
 from selenium_utils import cerrar_modales_bloqueantes
+from componentes_comunes import LogManager
 
 BASE_URL = "https://bancaempresas.pichincha.com/api/channel/business-banking/v1"
 CLIENT_ID = "08d3b5d8-82d3-4098-9eaf-ec7c430ac63c"
@@ -104,7 +105,7 @@ def obtener_sesion_api(driver, timeout=20, intervalo=1.5, forzar_navegacion=True
     navegar/recargar justo antes de llamar a esta función.
     """
     if forzar_navegacion:
-        print("  Disparando una petición fresca a la API (recargando la página)...")
+        LogManager.escribir_log("INFO", "Disparando una petición fresca a la API (recargando la página)...")
         driver.get(URL_BASE)
         time.sleep(3)
         cerrar_modales_bloqueantes(driver, timeout=8)
@@ -375,13 +376,13 @@ def descargar_todas_las_empresas_api(driver, ruta_descargas, dias_atras=7):
 
     cerrar_modales_bloqueantes(driver, timeout=8)
 
-    print("Obteniendo token de sesión desde el navegador...")
+    LogManager.escribir_log("INFO", "Obteniendo token de sesión desde el navegador...")
     token, uuid = obtener_sesion_api(driver)
-    print(f"  Token obtenido (uuid de sesión: {uuid})")
+    LogManager.escribir_log("SUCCESS", f"Token obtenido (uuid de sesión: {uuid})")
 
-    print("Consultando empresas...")
+    LogManager.escribir_log("INFO", "Consultando empresas...")
     empresas = obtener_empresas(driver, token, uuid)
-    print(f"  {len(empresas)} empresa(s) encontrada(s)")
+    LogManager.escribir_log("INFO", f"{len(empresas)} empresa(s) encontrada(s)")
 
     resultados = {}
 
@@ -391,15 +392,15 @@ def descargar_todas_las_empresas_api(driver, ruta_descargas, dias_atras=7):
 
         archivo = MAPEO_ARCHIVOS.get(nombre.strip().upper())
         if not archivo:
-            print(f"\n(Se omite '{nombre}': no está en MAPEO_ARCHIVOS)")
+            LogManager.escribir_log("WARNING", f"Se omite '{nombre}': no está en MAPEO_ARCHIVOS")
             continue
 
-        print(f"\n{'='*80}\n{nombre} (companyId={company_id})\n{'='*80}")
+        LogManager.escribir_log("INFO", f"{nombre} (companyId={company_id})")
 
         try:
             cuentas = obtener_cuentas(driver, token, uuid, company_id)
             if not cuentas:
-                print("  Sin cuentas visibles para esta empresa, se omite.")
+                LogManager.escribir_log("WARNING", "Sin cuentas visibles para esta empresa, se omite.")
                 resultados[nombre] = None
                 continue
 
@@ -407,7 +408,7 @@ def descargar_todas_las_empresas_api(driver, ruta_descargas, dias_atras=7):
             cuenta = cuentas[0]
             account_id = cuenta["accountId"]
             numero = cuenta.get("accountNumber", "")
-            print(f"  Cuenta {numero} (accountId={account_id})")
+            LogManager.escribir_log("INFO", f"Cuenta {numero} (accountId={account_id})")
 
             contenido_csv = descargar_csv_cuenta(driver, token, uuid, company_id, account_id, dias_atras)
 
@@ -415,17 +416,17 @@ def descargar_todas_las_empresas_api(driver, ruta_descargas, dias_atras=7):
             with open(ruta_final, "wb") as f:
                 f.write(contenido_csv)
 
-            print(f"  Guardado: {ruta_final} ({len(contenido_csv)} bytes)")
+            LogManager.escribir_log("SUCCESS", f"Guardado: {ruta_final} ({len(contenido_csv)} bytes)")
             resultados[nombre] = ruta_final
 
         except Exception as e:
-            print(f"  ERROR procesando {nombre}: {e}")
+            LogManager.escribir_log("ERROR", f"Error procesando {nombre}: {e}")
             resultados[nombre] = None
 
-    print("\n" + "=" * 80)
-    print("RESUMEN:")
+    # separador de resumen (ya no se imprime aparte, LogManager formatea sus propias líneas)
+    LogManager.escribir_log("INFO", "=== RESUMEN DESCARGA PICHINCHA ===")
     for nombre, rutas in resultados.items():
         estado = rutas if rutas else "FALLÓ"
-        print(f"  {nombre}: {estado}")
+        LogManager.escribir_log("INFO", f"{nombre}: {estado}")
 
     return resultados

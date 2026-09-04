@@ -17,11 +17,17 @@ real del banco.
 Logging: igual que el resto de bancos (Produbanco, JEP, Guayaquil), este
 script escribe a archivo vía LogManager (RUTAS_CONFIG['logs']) y registra
 cada corrida en las tablas compartidas AutomationRun/AutomationLog.
+
+IMPORTANTE: el procesamiento de los CSVs (2BancoPichincha_Final.py) se
+llama DIRECTO en este mismo proceso (vía importlib, no subprocess) para
+que reutilice el mismo id_ejecucion y el mismo archivo de log — antes,
+lanzarlo como subprocess aparte generaba un id_ejecucion propio y un
+segundo archivo de log para lo que en realidad es una sola corrida.
 """
 import os
 import sys
 import time
-import subprocess
+import importlib
 from datetime import datetime, timedelta
 
 from componentes_comunes import (
@@ -42,7 +48,13 @@ DATABASE_LOGS = "AutomationLog"
 NOMBRE_BANCO = "Banco Pichincha"
 
 RUTA_DESCARGAS = RUTAS_CONFIG.get('pichincha', "/home/administrador/configBancos/Pichincha")
-RUTA_SCRIPT_PROCESAMIENTO = "/home/administrador/Escritorio/bancos/2BancoPichincha_Final.py"
+
+# "2BancoPichincha_Final" empieza con un número, así que no se puede hacer
+# "import 2BancoPichincha_Final" directo (no es un identificador válido de
+# Python) — se carga con importlib. Debe estar en el PYTHONPATH (ver
+# bash_pichincha.sh, que ya agrega /home/administrador/Escritorio/bancos).
+NOMBRE_MODULO_PROCESADOR = "2BancoPichincha_Final"
+
 
 
 def formatear_tiempo_ejecucion(tiempo_delta):
@@ -213,17 +225,16 @@ def main():
 
         algun_archivo_ok = any(resultados.values())
         if algun_archivo_ok:
-            LogManager.escribir_log("INFO", f"Disparando procesamiento: {RUTA_SCRIPT_PROCESAMIENTO}")
-            proceso = subprocess.run(
-                [sys.executable, RUTA_SCRIPT_PROCESAMIENTO],
-                capture_output=True, text=True
+            LogManager.escribir_log(
+                "INFO", f"Llamando al procesador ({NOMBRE_MODULO_PROCESADOR}) en el mismo proceso, "
+                f"reutilizando id_ejecucion={id_ejecucion}...")
+            procesador = importlib.import_module(NOMBRE_MODULO_PROCESADOR)
+            resultado_procesamiento = procesador.procesar_todos_los_archivos(id_ejecucion)
+            LogManager.escribir_log(
+                "SUCCESS",
+                f"Procesamiento: {resultado_procesamiento['archivos_procesados']} archivos procesados, "
+                f"{resultado_procesamiento['archivos_exitosos']} exitosos"
             )
-            if proceso.stdout:
-                LogManager.escribir_log("INFO", proceso.stdout.strip())
-            if proceso.returncode != 0:
-                LogManager.escribir_log("WARNING", f"El procesamiento terminó con código {proceso.returncode}")
-                if proceso.stderr:
-                    LogManager.escribir_log("WARNING", proceso.stderr.strip())
         else:
             LogManager.escribir_log(
                 "WARNING", "Ninguna empresa se descargó correctamente — no se dispara el procesamiento.")

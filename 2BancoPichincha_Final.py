@@ -2,6 +2,19 @@
 """
 BANCO Pichincha - PROCESAMIENTO DE ARCHIVOS CSV OPTIMIZADO
 Versión optimizada del procesador original usando componentes comunes
+
+CAMBIO IMPORTANTE: la lógica de procesamiento se separó en
+procesar_todos_los_archivos(id_ejecucion), que NO genera su propio
+id_ejecucion ni abre su propio log — así session.py (el RPA de Selenium)
+puede llamarla directamente en el mismo proceso, reutilizando su mismo
+id_ejecucion y su mismo archivo de log, en vez de lanzar este script como
+un subprocess aparte (que generaba un segundo ID y un segundo archivo de
+log para lo que en realidad es una sola corrida).
+
+Este archivo se puede seguir ejecutando de forma independiente
+(`python 2BancoPichincha_Final.py`) para reprocesar CSVs sueltos que hayan
+quedado pendientes — en ese caso main() sí genera su propio id_ejecucion
+como antes.
 """
 from datetime import datetime, timedelta
 import time
@@ -17,16 +30,10 @@ from componentes_comunes import (
 )
 
 # ==================== CONFIGURACIÓN GLOBAL ====================
-
-# DATABASE = "RegistrosBancosPRUEBA"
-# DATABASE_LOGS = "AutomationLogPRUEBA"
-# DATABASE_RUNS = "AutomationRunPRUEBA"
 DATABASE = "RegistrosBancos"
 DATABASE_LOGS = "AutomationLog"
 DATABASE_RUNS = "AutomationRun"
 NOMBRE_BANCO = "Banco Pichincha"
-
-# ==================== FUNCIONES DE BASE DE DATOS ====================
 
 EMPRESAS_PICHINCHA = {
     "AUTOLLANTA": {"numCuenta": "2100031073", "empresa": "AUTOLLANTA C LTDA"},
@@ -50,8 +57,11 @@ def obtener_empresa_desde_nombre_archivo(nombre_archivo):
         return base.split(".")[0].upper()
 
 
+# ==================== FUNCIONES DE BASE DE DATOS ====================
+
 def obtenerIDEjecucion():
-    """Obtiene el siguiente ID de ejecución de la BD"""
+    """Obtiene el siguiente ID de ejecución de la BD (solo se usa cuando
+    este script corre de forma independiente, ver main())."""
     try:
         sql = f"SELECT MAX(idAutomationRun) FROM {DATABASE_RUNS}"
         resultado = BaseDatos.consultarBD(sql)
@@ -75,8 +85,14 @@ def datosEjecucion(sql):
 
 
 def escribirLog(mensaje, id_ejecucion, estado, accion):
-    """Escribe un log en la BD"""
-    texto_limpio = mensaje.replace("'", "''")
+    """
+    Escribe un log en la BD. Se trunca a 400 caracteres para evitar el
+    error de SQL Server "datos truncados" si el mensaje trae un stacktrace
+    largo (ver el mismo fix aplicado en session.py).
+    """
+    mensaje_una_linea = " ".join(mensaje.split())
+    mensaje_truncado = mensaje_una_linea[:400]
+    texto_limpio = mensaje_truncado.replace("'", "''")
     sql = f"""
         INSERT INTO {DATABASE_LOGS} (idAutomationRun, processName, dateLog, statusLog, action)
         VALUES ({id_ejecucion}, '{texto_limpio}',
@@ -92,6 +108,7 @@ def safe_float(valor):
         return float(valor.replace(",", ""))
     except Exception:
         return 0.0
+
 
 def obtener_base_y_sufijo(num_doc):
     """
@@ -136,43 +153,36 @@ def movimiento_ya_existe(documento, fecha_sql, monto, saldo, tipo, documentos_bd
         ):
             return True
     return False
-    
+
+
 def procesar_csv_pichincha(ruta_csv, id_ejecucion):
     """Procesa un archivo CSV de Banco Pichincha"""
     try:
-
         empresa_key = obtener_empresa_desde_nombre_archivo(ruta_csv)
         info_empresa = EMPRESAS_PICHINCHA.get(
             empresa_key, {"numCuenta": "", "empresa": empresa_key})
         num_cuenta = info_empresa["numCuenta"]
         empresa = info_empresa["empresa"]
-
         registros = LectorArchivos.leerCSV(ruta_csv)
-        # print(f"Registros leídos: {registros}")
         if not registros or len(registros) < 2:
             LogManager.escribir_log(
                 "ERROR", "El archivo CSV no tiene datos suficientes")
             return False
-
         encabezado = [col.strip().lower().replace(" ", "") for col in registros[0]]
-
         movimientos_insertados = 0
         movimientos_omitidos = 0
         consultas_a_insertar = []
-
         for i, fila in enumerate(registros[1:], start=2):
             try:
                 fila_dict = dict(zip(encabezado, fila))
                 documento = str(fila_dict.get("documento", "")).strip().zfill(10)
-                
+
                 fecha = fila_dict.get("fecha", "").strip()
                 tipo = fila_dict.get("tipo", "").strip()
                 monto = safe_float(fila_dict.get("monto", "0"))
                 saldo = safe_float(fila_dict.get("saldo", "0"))
                 oficina = fila_dict.get("oficina", "").strip()
                 concepto = fila_dict.get("concepto", "").strip()
-
-                # Convertir fecha a YYYY-MM-DD
                 try:
                     fecha_obj = datetime.strptime(fecha, "%d/%m/%Y")
                     fecha_sql = fecha_obj.strftime("%Y-%m-%d")
@@ -180,14 +190,10 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
                     LogManager.escribir_log(
                         "WARNING", f"Fila {i}: Fecha inválida: {fecha}")
                     continue
-
-                # Validar que la fecha sea mayor a 30 días antes de la fecha actual
                 fecha_limite = (datetime.now() - timedelta(days=30)).date()
                 if fecha_obj.date() <= fecha_limite:
                     movimientos_omitidos += 1
                     continue
-
-                # Verificar duplicados
                 sql_check = f"""
                     SELECT COUNT(*) FROM {DATABASE}
                     WHERE numDocumento = '{documento}'
@@ -200,8 +206,6 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
                 if resultado_check and resultado_check[0][0] > 0:
                     movimientos_omitidos += 1
                     continue
-
-                # Buscar documentos existentes con el mismo número base
                 sql_buscar = f"""
                     SELECT numDocumento, fechaTransaccion, valor, saldoContable, tipo FROM {DATABASE}
                     WHERE banco = '{NOMBRE_BANCO}'
@@ -209,7 +213,6 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
                     AND numCuenta = '{num_cuenta}'
                     AND numDocumento LIKE '{documento}%'
                 """
-
                 resultado_buscar = BaseDatos.consultarBD(sql_buscar)
                 documentos_bd = [
                     {
@@ -221,17 +224,12 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
                     }
                     for row in resultado_buscar
                 ]
-
-                # 1. Si ya existe exactamente el mismo movimiento, omitir
                 if movimiento_ya_existe(documento, fecha_sql, monto, saldo, tipo, documentos_bd):
                     movimientos_omitidos += 1
                     continue
-
-                # 2. Si existe el número base pero con algún campo diferente, asignar sufijo
                 documentos_existentes = obtener_documentos_con_mismo_numero_base(documento, documentos_bd)
                 sufijo = 0
                 numDocumento_final = documento
-
                 if documentos_existentes:
                     mayor_sufijo = 0
                     for doc_existente in documentos_existentes:
@@ -239,8 +237,6 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
                         mayor_sufijo = max(mayor_sufijo, sufijo_existente)
                     sufijo = mayor_sufijo + 1
                     numDocumento_final = f"{documento}-{sufijo}"
-
-                # Preparar consulta de inserción
                 sql_insert = f"""
                     INSERT INTO {DATABASE}
                     (numCuenta, banco, empresa, numDocumento, idEjecucion, fechaTransaccion,
@@ -253,33 +249,26 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
                     )
                 """
                 consultas_a_insertar.append(sql_insert)
-
             except Exception as e:
                 LogManager.escribir_log(
                     "WARNING", f"Error procesando fila {i}: {str(e)}")
                 movimientos_omitidos += 1
                 continue
-
-        # Validar si el archivo es posiblemente incorrecto (0 omitidos)
         if movimientos_omitidos == 0:
             LogManager.escribir_log(
                 "WARNING", f"El archivo {os.path.basename(ruta_csv)} posiblemente esté incorrecto (0 omitidos), no se insertará.")
             return False
-
-        # Si pasa la validación, procedemos a insertar
         for sql_insert in consultas_a_insertar:
             if BaseDatos.ejecutarSQL(sql_insert):
                 movimientos_insertados += 1
             else:
                 movimientos_omitidos += 1
-
         return {
             "empresa": empresa,
             "archivo": os.path.basename(ruta_csv),
             "insertados": movimientos_insertados,
             "omitidos": movimientos_omitidos
         }
-
     except Exception as e:
         LogManager.escribir_log("ERROR", f"Error procesando archivo CSV: {str(e)}")
         return False
@@ -288,127 +277,125 @@ def procesar_csv_pichincha(ruta_csv, id_ejecucion):
 def obtenerArchivos():
     """Obtiene la lista de archivos CSV para procesar, ordenados por fecha"""
     try:
-
-        # Ruta por defecto si no está configurada
         ruta_archivos = RUTAS_CONFIG['pichincha']
-
         if not os.path.exists(ruta_archivos):
             LogManager.escribir_log(
                 "ERROR", f"La ruta no existe: {ruta_archivos}")
             return []
-
         archivos = []
         for archivo in os.listdir(ruta_archivos):
             if archivo.lower().endswith('.csv'):
                 ruta_completa = os.path.join(ruta_archivos, archivo)
                 archivos.append(ruta_completa)
-
         archivos_ordenados = sorted(
             archivos,
             key=lambda x: os.path.getmtime(x),
             reverse=True
         )
-
         LogManager.escribir_log(
             "INFO", f"Encontrados {len(archivos_ordenados)} archivos CSV para procesar")
         return archivos_ordenados
-
     except Exception as e:
         LogManager.escribir_log(
             "ERROR", f"Error obteniendo archivos: {str(e)}")
         return []
 
 
-# ==================== FUNCIÓN PRINCIPAL ====================
+# ==================== FUNCIÓN REUTILIZABLE (sin bootstrap de ID/log) ====================
 
+def procesar_todos_los_archivos(id_ejecucion):
+    """
+    Procesa todos los CSVs pendientes y sube el BAT final.
+
+    NO genera su propio id_ejecucion, NO llama a LogManager.iniciar_proceso
+    ni inserta una fila nueva en AutomationRun — usa el id_ejecucion y el
+    contexto de log que ya haya sido inicializado por quien la llame (ej.
+    session.py, en el mismo proceso). Esto es justo lo que permite que se
+    reutilice el mismo archivo de log en vez de crear uno nuevo.
+
+    Devuelve un dict: {"archivos_procesados": int, "archivos_exitosos": int}
+    Lanza una excepción si algo falla de forma fatal (el caller decide qué
+    hacer con eso, igual que con cualquier otra función del flujo).
+    """
+    archivos = obtenerArchivos()
+    if not archivos:
+        LogManager.escribir_log("WARNING", "No se encontraron archivos CSV para procesar")
+        escribirLog("No se encontraron archivos para procesar", id_ejecucion, "Warning", "Sin archivos")
+        return {"archivos_procesados": 0, "archivos_exitosos": 0}
+
+    archivos_procesados = 0
+    archivos_exitosos = 0
+
+    for archivo in archivos:
+        try:
+            LogManager.escribir_log(
+                "INFO", f"📁 Procesando archivo {archivos_procesados + 1} de {len(archivos)}")
+            if archivo.lower().endswith('.csv'):
+                resumen = procesar_csv_pichincha(archivo, id_ejecucion)
+            else:
+                break
+
+            if resumen:
+                archivos_exitosos += 1
+                escribirLog(f"Archivo procesado exitosamente: {resumen['archivo']}",
+                            id_ejecucion, "Information", "Procesamiento")
+                try:
+                    os.remove(archivo)
+                    LogManager.escribir_log("INFO", f"Archivo eliminado: {archivo}")
+                except Exception as e:
+                    LogManager.escribir_log("WARNING", f"No se pudo eliminar el archivo {archivo}: {str(e)}")
+            else:
+                escribirLog(f"Archivo procesado sin nuevos registros: {os.path.basename(archivo)}",
+                            id_ejecucion, "Warning", "Procesamiento")
+
+            if resumen:
+                LogManager.escribir_log(
+                    "SUCCESS",
+                    f"Empresa: {resumen['empresa']} | Archivo: {resumen['archivo']} | Insertados: {resumen['insertados']} | Omitidos: {resumen['omitidos']}"
+                )
+            archivos_procesados += 1
+
+        except Exception as e:
+            LogManager.escribir_log("ERROR", f"Error procesando archivo {archivo}: {str(e)}")
+            escribirLog(f"Error en archivo {os.path.basename(archivo)}: {str(e)}",
+                        id_ejecucion, "Error", "Procesamiento")
+            archivos_procesados += 1
+            continue
+
+    mensaje_final = f"Procesamiento completado - {archivos_procesados} archivos procesados, {archivos_exitosos} exitosos"
+    LogManager.escribir_log("SUCCESS", mensaje_final)
+
+    LogManager.escribir_log("INFO", "🔧 Ejecutando proceso final...")
+    SubprocesoManager.ejecutar_bat_final()
+
+    return {"archivos_procesados": archivos_procesados, "archivos_exitosos": archivos_exitosos}
+
+
+# ==================== FUNCIÓN PRINCIPAL (solo para uso independiente) ====================
 
 def main():
-    """Función principal que procesa todos los archivos de Banco Pichincha"""
+    """
+    Función principal para correr este script DE FORMA INDEPENDIENTE
+    (ej. `python 2BancoPichincha_Final.py` a mano, para reprocesar CSVs
+    sueltos). Genera su propio id_ejecucion y su propio log, igual que
+    antes. Cuando lo llama session.py, NO se pasa por aquí — se llama
+    directo a procesar_todos_los_archivos() reutilizando su id_ejecucion.
+    """
     id_ejecucion = None
-
     try:
-        # Obtener ID de ejecución
         id_ejecucion = obtenerIDEjecucion()
-
         LogManager.iniciar_proceso(
             NOMBRE_BANCO, id_ejecucion, f"Procesamiento archivos CSV Pichincha - ID: {id_ejecucion}")
 
-        # Registrar inicio en BD
         sql_inicio = f"""
             INSERT INTO {DATABASE_RUNS} (idAutomationRun, processName, startDate, finalizationStatus) 
             VALUES ({id_ejecucion}, 'Procesamiento archivos-{NOMBRE_BANCO}', SYSDATETIME(), 'Running')
         """
         datosEjecucion(sql_inicio)
-        escribirLog("Inicio del proceso", id_ejecucion,
-                    "Information", "Inicio")
+        escribirLog("Inicio del proceso", id_ejecucion, "Information", "Inicio")
 
-        # Obtener archivos para procesar
-        archivos = obtenerArchivos()
+        resultado = procesar_todos_los_archivos(id_ejecucion)
 
-        if not archivos:
-            LogManager.escribir_log(
-                "WARNING", "No se encontraron archivos CSV para procesar")
-            escribirLog("No se encontraron archivos para procesar",
-                        id_ejecucion, "Warning", "Sin archivos")
-
-            # Marcar como completado sin errores
-            sql_fin = f"""
-                UPDATE {DATABASE_RUNS} 
-                SET endDate = SYSDATETIME(), finalizationStatus = 'Completed' 
-                WHERE idAutomationRun = {id_ejecucion}
-            """
-            datosEjecucion(sql_fin)
-
-            LogManager.finalizar_proceso(
-                NOMBRE_BANCO, exito=True, descripcion="No hay archivos para procesar")
-            return True
-
-        # Procesar cada archivo
-        archivos_procesados = 0
-        archivos_exitosos = 0
-
-        for archivo in archivos:
-            try:
-                LogManager.escribir_log(
-                    "INFO", f"📁 Procesando archivo {archivos_procesados + 1} de {len(archivos)}")
-
-                if archivo.lower().endswith('.csv'):
-                    resumen = procesar_csv_pichincha(archivo, id_ejecucion)
-                else:
-                    break
-
-                if resumen:
-                    archivos_exitosos += 1
-                    escribirLog(f"Archivo procesado exitosamente: {resumen['archivo']}",
-                                id_ejecucion, "Information", "Procesamiento")
-                    # BORRAR ARCHIVO SOLO SI SE PROCESÓ EXITOSAMENTE
-                    try:
-                        os.remove(archivo)
-                        LogManager.escribir_log("INFO", f"Archivo eliminado: {archivo}")
-                    except Exception as e:
-                        LogManager.escribir_log("WARNING", f"No se pudo eliminar el archivo {archivo}: {str(e)}")
-                else:
-                    escribirLog(f"Archivo procesado sin nuevos registros: {os.path.basename(archivo)}",
-                                id_ejecucion, "Warning", "Procesamiento")
-
-                # Log detallado por empresa
-                if resumen:
-                    LogManager.escribir_log(
-                        "SUCCESS",
-                        f"Empresa: {resumen['empresa']} | Archivo: {resumen['archivo']} | Insertados: {resumen['insertados']} | Omitidos: {resumen['omitidos']}"
-                    )
-
-                archivos_procesados += 1
-
-            except Exception as e:
-                LogManager.escribir_log(
-                    "ERROR", f"Error procesando archivo {archivo}: {str(e)}")
-                escribirLog(f"Error en archivo {os.path.basename(archivo)}: {str(e)}",
-                            id_ejecucion, "Error", "Procesamiento")
-                archivos_procesados += 1
-                continue
-
-        # Marcar como completado
         sql_fin = f"""
             UPDATE {DATABASE_RUNS} 
             SET endDate = SYSDATETIME(), finalizationStatus = 'Completed' 
@@ -416,22 +403,16 @@ def main():
         """
         datosEjecucion(sql_fin)
 
-        # Mensaje final
-        mensaje_final = f"Procesamiento completado - {archivos_procesados} archivos procesados, {archivos_exitosos} exitosos"
-        LogManager.escribir_log("SUCCESS", mensaje_final)
-
-        # Ejecutar BAT para subir movimientos al portal
-        LogManager.escribir_log("INFO", "🔧 Ejecutando proceso final...")
-        SubprocesoManager.ejecutar_bat_final()
-
-        LogManager.finalizar_proceso(
-            NOMBRE_BANCO, exito=True, descripcion=mensaje_final)
+        mensaje_final = (
+            f"Procesamiento completado - {resultado['archivos_procesados']} archivos procesados, "
+            f"{resultado['archivos_exitosos']} exitosos"
+        )
+        LogManager.finalizar_proceso(NOMBRE_BANCO, exito=True, descripcion=mensaje_final)
         return True
 
     except Exception as e:
         error_msg = f"Error en proceso principal: {str(e)}"
         LogManager.escribir_log("ERROR", error_msg)
-
         if id_ejecucion:
             sql_error = f"""
                 UPDATE {DATABASE_RUNS} 
@@ -440,13 +421,9 @@ def main():
             """
             datosEjecucion(sql_error)
             escribirLog(error_msg, id_ejecucion, "Error", "Error Fatal")
-
-            # Ejecutar BAT para subir movimientos al portal
             LogManager.escribir_log("INFO", "🔧 Ejecutando proceso final...")
             SubprocesoManager.ejecutar_bat_final()
-
-        LogManager.finalizar_proceso(
-            NOMBRE_BANCO, exito=False, descripcion=error_msg)
+        LogManager.finalizar_proceso(NOMBRE_BANCO, exito=False, descripcion=error_msg)
         return False
 
 
@@ -454,12 +431,10 @@ if __name__ == "__main__":
     try:
         resultado = main()
         if resultado:
-            LogManager.escribir_log(
-                "SUCCESS", "=== PROCESAMIENTO COMPLETADO EXITOSAMENTE ===")
+            LogManager.escribir_log("SUCCESS", "=== PROCESAMIENTO COMPLETADO EXITOSAMENTE ===")
         else:
             LogManager.escribir_log("ERROR", "=== PROCESAMIENTO FALLÓ ===")
     except Exception as e:
-        LogManager.escribir_log(
-            "ERROR", f"Error crítico en ejecución: {str(e)}")
+        LogManager.escribir_log("ERROR", f"Error crítico en ejecución: {str(e)}")
     finally:
         LogManager.escribir_log("INFO", "=== FIN DE EJECUCIÓN ===")

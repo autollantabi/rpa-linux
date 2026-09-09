@@ -630,14 +630,22 @@ def procesar_empresa_por_posicion(page, id_ejecucion, posicion):
 
 
 def seleccionar_empresa(page, posicion):
-    """Selecciona una empresa específica (primera/ultima)"""
     try:
         if posicion == "ultima":
-            # Última fila - hacer click en el enlace de la cuenta
             enlace_xpath = "//tbody[contains(@id, 'tablaDatosConsolAhorros_data')]/tr[last()]//a[contains(@id, ':tablaDatosConsolAhorros:')]"
-        else:  # primera
-            # Primera fila - hacer click en el enlace de la cuenta
+        else:
             enlace_xpath = "//tbody[contains(@id, 'tablaDatosConsolAhorros_data')]/tr[1]//a[contains(@id, ':tablaDatosConsolAhorros:')]"
+
+        # Diagnóstico: si el link no aparece rápido, capturar estado real
+        if not ComponenteInteraccion.esperarElemento(page, enlace_xpath, timeout=8000, descripcion=f"enlace cuenta {posicion}"):
+            LogManager.escribir_log("WARNING", f"Enlace {posicion} no apareció en 8s, capturando diagnóstico")
+            try:
+                LogManager.escribir_log("DEBUG", f"URL actual: {page.url}")
+                tbody_html = page.locator("//tbody[contains(@id, 'tablaDatosConsolAhorros_data')]").first.inner_html(timeout=3000)
+                LogManager.escribir_log("DEBUG", f"HTML tabla: {tbody_html[:2000]}")
+            except Exception as diag_err:
+                LogManager.escribir_log("DEBUG", f"No se pudo capturar diagnóstico: {diag_err}")
+            return False
 
         click_con_habilitacion(page, enlace_xpath, f"enlace cuenta {posicion}")
         LogManager.escribir_log("INFO", f"Cuenta seleccionada: {posicion}")

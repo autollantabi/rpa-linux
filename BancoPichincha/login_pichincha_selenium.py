@@ -25,6 +25,7 @@ from selenium.common.exceptions import (
     TimeoutException,
     NoSuchElementException,
     ElementClickInterceptedException,
+    StaleElementReferenceException,
 )
 from webdriver_manager.chrome import ChromeDriverManager
 
@@ -35,14 +36,6 @@ from componentes_comunes import (LectorArchivos,
 import telegram_2fa
 
 URL_LOGIN = "https://bancaempresas.pichincha.com/"
-# IMPORTANTE: no uses la URL completa de "authorize?..." capturada de una sesión
-# del navegador. Esa URL trae un nonce/state/code_challenge de un solo uso,
-# generado por MSAL.js y atado al sessionStorage de esa sesión puntual.
-# Reusarla en una sesión de Selenium nueva puede dejar el flujo OAuth en un
-# estado inconsistente (el formulario carga pero el estado interno está roto).
-# Deja que la propia página redirija y genere su flujo OAuth fresco, igual que
-# hace un usuario real al entrar a la home del banco.
-
 TIMEOUT_ELEMENTO = 20  # segundos de espera para cada elemento
 
 
@@ -54,18 +47,18 @@ def crear_driver(headless=False, ruta_descargas=None):
         opciones.add_argument("--headless=new")
 
     opciones.add_argument("--disable-blink-features=AutomationControlled")
-    opciones.add_argument("--disable-dev-shm-usage")  # evita crashes de renderer por memoria compartida limitada
-    opciones.add_argument("--no-sandbox")  # Chrome se niega a iniciar corriendo como root sin esto
+    opciones.add_argument("--disable-dev-shm-usage")
+    opciones.add_argument("--no-sandbox")
+    # Cada refresco de token recarga la página completa (incluyendo el
+    # widget de reCAPTCHA), y ya vimos advertencias de "too many active
+    # WebGL contexts" en versiones anteriores — --disable-gpu fuerza
+    # renderizado por software, evitando que se agoten esos contextos y
+    # el navegador termine cerrándose solo tras varias recargas.
+    opciones.add_argument("--disable-gpu")
     opciones.add_argument("--start-maximized")
     opciones.add_argument("--disable-infobars")
     opciones.add_experimental_option("excludeSwitches", ["enable-automation"])
     opciones.add_experimental_option("useAutomationExtension", False)
-
-    # Habilita la captura de logs de red (CDP) — la app del banco cifra su
-    # access token dentro de sessionStorage (no usa el cache estándar de
-    # MSAL), así que la única forma limpia de conseguirlo es leyéndolo del
-    # header Authorization real que la propia app manda en sus peticiones
-    # — lo mismo que verías a mano en DevTools > Network.
     opciones.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
     if ruta_descargas:
@@ -76,12 +69,7 @@ def crear_driver(headless=False, ruta_descargas=None):
 
     servicio = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=servicio, options=opciones)
-
-    # Habilita el dominio Network de CDP para poder leer después los headers
-    # reales (incluyendo Authorization) de las peticiones que la app haga.
     driver.execute_cdp_cmd("Network.enable", {})
-
-    # Oculta navigator.webdriver, igual que hacías en Playwright con add_init_script
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -90,16 +78,14 @@ def crear_driver(headless=False, ruta_descargas=None):
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
         """
     })
-
     return driver
 
 
 def esperar_y_obtener(driver, by, selector, timeout=TIMEOUT_ELEMENTO, descripcion=""):
     try:
-        elemento = WebDriverWait(driver, timeout).until(
+        return WebDriverWait(driver, timeout).until(
             EC.visibility_of_element_located((by, selector))
         )
-        return elemento
     except TimeoutException:
         raise Exception(f"No se encontró/visible el elemento '{descripcion or selector}' tras {timeout}s")
 
@@ -122,19 +108,6 @@ def click_seguro(driver, by, selector, timeout=TIMEOUT_ELEMENTO, descripcion="",
 
 def escribir_seguro(driver, by, selector, texto, timeout=TIMEOUT_ELEMENTO, descripcion="",
                      max_intentos=3, espera_estabilidad=0.8):
-    """
-    Escribe en un campo de forma robusta para apps React/Angular donde el
-    tipeo carácter por carácter (send_keys) pierde teclas por la velocidad
-    del re-render del framework.
-
-    En vez de simular teclas, escribe el valor DIRECTO usando el setter nativo
-    del <input> (bypassea el tracking interno de React) y dispara 'input' +
-    'change' manualmente — es exactamente lo que hace Playwright.fill() por
-    debajo, y es atómico: no hay carrera con el framework.
-
-    Luego verifica que el valor se mantenga estable (por si hay validación
-    async que lo limpia en el blur) y reintenta si hace falta.
-    """
     JS_SET_VALUE = """
         const el = arguments[0];
         const valor = arguments[1];
@@ -148,22 +121,17 @@ def escribir_seguro(driver, by, selector, texto, timeout=TIMEOUT_ELEMENTO, descr
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
     """
-
     for intento in range(1, max_intentos + 1):
         elemento = esperar_y_obtener(driver, by, selector, timeout, descripcion)
-        elemento.click()  # asegura foco real, algunos widgets lo necesitan
-
+        elemento.click()
         driver.execute_script(JS_SET_VALUE, elemento, texto)
-
         time.sleep(espera_estabilidad)
         valor_actual = elemento.get_attribute("value")
-
         if valor_actual == texto:
             return
         else:
             LogManager.escribir_log("WARNING", f"'{descripcion}' quedó como '{valor_actual}', "
                   f"reintentando ({intento}/{max_intentos})...")
-
     raise Exception(
         f"El campo '{descripcion}' no mantiene el valor correcto tras {max_intentos} intentos "
         f"(quedó como '{valor_actual}'). Revisar si hay una máscara/formato especial en el campo."
@@ -171,39 +139,31 @@ def escribir_seguro(driver, by, selector, texto, timeout=TIMEOUT_ELEMENTO, descr
 
 
 def login_pichincha(driver, usuario, password, id_ejecucion=0):
-    """
-    Realiza el login completo: usuario/contraseña + espera manual del código 2FA
-    a través de la web local (token_web).
-    """
+    """Realiza el login completo: usuario/contraseña + espera del código 2FA por Telegram."""
     LogManager.escribir_log("INFO", "Navegando a la home del banco (dejamos que redirija sola al login)...")
     driver.get(URL_LOGIN)
 
-    # La home hace un par de redirecciones (home -> authorize de Azure B2C) antes
-    # de que el formulario de usuario/contraseña esté realmente listo. Esperamos
-    # a que el campo sea VISIBLE (no solo que exista en el DOM).
     LogManager.escribir_log("INFO", "Esperando a que cargue el formulario de login...")
     WebDriverWait(driver, TIMEOUT_ELEMENTO).until(
         EC.visibility_of_element_located((By.ID, "signInName"))
     )
 
+    # El banco agregó un modal de "Por su seguridad" (#securityModal) que
+    # puede aparecer justo al cargar esta pantalla, tapando el formulario.
+    # Lo cerramos ANTES de intentar escribir usuario/contraseña, si no, el
+    # clic para enfocar esos campos puede quedar interceptado por el
+    # overlay del modal.
+    cerrar_modales_bloqueantes(driver, timeout=10)
+
     LogManager.escribir_log("INFO", "Ingresando usuario y contraseña...")
     escribir_seguro(driver, By.ID, "signInName", usuario, descripcion="usuario")
     escribir_seguro(driver, By.ID, "password", password, descripcion="password")
 
-    # Revalidación final: el 'blur' de usuario (al enfocar contraseña) puede
-    # disparar la validación async que lo vacía DESPUÉS de que ya lo verificamos.
-    # Si pasó, lo reescribimos justo antes de enviar.
     campo_usuario = esperar_y_obtener(driver, By.ID, "signInName", descripcion="usuario (revalidación)")
     if campo_usuario.get_attribute("value") != usuario:
         LogManager.escribir_log("WARNING", "El campo usuario se vació tras pasar a contraseña, reescribiendo antes de enviar...")
         escribir_seguro(driver, By.ID, "signInName", usuario, descripcion="usuario", espera_estabilidad=0.3)
 
-    # IMPORTANTE: el sitio usa reCAPTCHA Enterprise y solo lo dispara con
-    # eventos 'keyup' reales en los campos (o al hacer clic en Ingresar, como
-    # respaldo). Como escribimos los campos por JS (sin keyup), el token nunca
-    # se generaba al escribir. Lo disparamos manualmente aquí y ESPERAMOS a
-    # que el token exista antes del primer clic — así no dependemos de que un
-    # clic anterior haya dejado un token cacheado.
     LogManager.escribir_log("INFO", "Generando token de reCAPTCHA...")
     driver.execute_script("if (typeof generateCaptcha === 'function') { generateCaptcha(); }")
     try:
@@ -217,30 +177,30 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
         LogManager.escribir_log("WARNING", "El token de reCAPTCHA no se generó en 15s, se continúa igual "
               "(el clic en Ingresar también lo dispara como respaldo).")
 
-    # Espera a que el botón esté realmente HABILITADO (no solo presente/clickeable
-    # en el DOM). Muchos formularios lo deshabilitan mientras corre una validación
-    # interna tras rellenar los campos, y dar clic antes de que se habilite
-    # produce un error de submit.
     LogManager.escribir_log("INFO", "Esperando a que el botón 'Ingresar' esté habilitado...")
     WebDriverWait(driver, TIMEOUT_ELEMENTO).until(
         lambda d: d.find_element(By.ID, "continue").get_attribute("disabled") is None
     )
-    time.sleep(1.5)  # margen extra de seguridad tras habilitarse
+    time.sleep(1.5)
 
-    # Reintentos de clic: a veces el primer clic no "prende" (overlay, foco,
-    # timing del framework). El botón "#continue" se REUTILIZA en todos los
-    # pasos del wizard de Azure B2C (login, código, etc.) — es el mismo ID en
-    # todo el flujo, así que su desaparición NO es una señal confiable de
-    # progreso. Lo que sí es confiable es la aparición de las casillas del
-    # código (#oneDigit, etc.), que solo existen en el paso del token.
     IDS_DIGITOS = ["oneDigit", "twoDigit", "threeDigit", "fourDigit", "fiveDigit", "sixDigit"]
+
+    # Mensajes del banco que sí son FATALES (no tiene caso reintentar). Todo
+    # lo demás que aparezca en #warning se trata como transitorio/genérico
+    # (ej. "Ha ocurrido un error, intente de nuevo más tarde") y se reintenta.
+    PATRONES_FATALES = [
+        "contraseña incorrecta",
+        "usuario o contraseña",
+        "límite de intentos",
+        "supera el límite",
+        "cuenta bloqueada",
+        "usuario bloqueado",
+    ]
 
     MAX_INTENTOS_LOGIN = 3
     pantalla_2fa_cargo = False
 
     for intento_login in range(1, MAX_INTENTOS_LOGIN + 1):
-        # ¿Ya estamos en la pantalla del token? (quizás el clic anterior sí
-        # funcionó y solo tardó en reflejarse)
         casillas = driver.find_elements(By.ID, "oneDigit")
         if casillas and casillas[0].is_displayed():
             pantalla_2fa_cargo = True
@@ -257,18 +217,37 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
             pantalla_2fa_cargo = True
             break
         except TimeoutException:
-            # Antes de reintentar, revisa si el banco mostró su propio mensaje
-            # de error real (ej. "Usuario o contraseña incorrecta") — si es así,
-            # no tiene sentido seguir reintentando el clic.
-            alerta_error = driver.find_elements(By.ID, "warning")
-            if alerta_error:
-                clases = alerta_error[0].get_attribute("class") or ""
-                if "hiden" not in clases:
-                    texto_error = alerta_error[0].text.strip()
-                    raise Exception(
-                        f"El banco rechazó el login con el mensaje: '{texto_error}'. "
-                        "Revisa las credenciales."
-                    )
+            # Antes de reintentar, revisa si el banco mostró un mensaje de
+            # error real, y si es FATAL (credenciales/bloqueo) o solo
+            # transitorio/genérico (en cuyo caso sí vale la pena reintentar).
+            #
+            # Envuelto en try/except porque justo aquí la página puede estar
+            # en pleno cambio de pantalla — el elemento puede volverse
+            # "stale" entre una línea y la siguiente, lo cual normalmente es
+            # BUENA señal (la navegación sí está avanzando).
+            try:
+                alerta_error = driver.find_elements(By.ID, "warning")
+                if alerta_error:
+                    clases = alerta_error[0].get_attribute("class") or ""
+                    if "hiden" not in clases:
+                        texto_error = alerta_error[0].text.strip()
+                        texto_error_normalizado = texto_error.lower()
+                        es_fatal = any(patron in texto_error_normalizado for patron in PATRONES_FATALES)
+
+                        if es_fatal:
+                            raise Exception(
+                                f"El banco rechazó el login con el mensaje: '{texto_error}'. "
+                                "Revisa las credenciales."
+                            )
+                        else:
+                            LogManager.escribir_log(
+                                "WARNING",
+                                f"El banco mostró un mensaje genérico/transitorio: '{texto_error}' — "
+                                "se reintenta en vez de abortar."
+                            )
+            except StaleElementReferenceException:
+                LogManager.escribir_log(
+                    "INFO", "La página cambió de pantalla justo al verificar errores (buena señal), continuando...")
 
             if intento_login < MAX_INTENTOS_LOGIN:
                 LogManager.escribir_log("WARNING", "La pantalla del token no cargó todavía, reintentando...")
@@ -299,13 +278,10 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
         raise Exception(f"Código con formato inválido recibido: '{codigo}'")
 
     LogManager.escribir_log("INFO", "Código recibido, ingresándolo en las 6 casillas del Pichincha Token...")
-    # El código no va en un solo campo: son 6 casillas de un dígito cada una
-    # (id="oneDigit" ... id="sixDigit"), generadas por la app Pichincha Token.
     for id_casilla, digito in zip(IDS_DIGITOS, codigo):
         escribir_seguro(driver, By.ID, id_casilla, digito, descripcion=f"dígito ({id_casilla})",
                         espera_estabilidad=0.3)
 
-    # El botón "continue" se habilita solo cuando las 6 casillas están completas.
     LogManager.escribir_log("INFO", "Esperando a que el botón 'Ingresar' se habilite tras completar el código...")
     WebDriverWait(driver, TIMEOUT_ELEMENTO).until(
         lambda d: d.find_element(By.ID, "continue").get_attribute("disabled") is None
@@ -314,9 +290,6 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
 
     click_seguro(driver, By.ID, "continue", descripcion="botón validar código")
 
-    # Señal de éxito confiable: la URL deja de estar en el dominio de login
-    # (login.empresas.pichincha.com) y vuelve al dominio de la app
-    # (bancaempresas.pichincha.com) con la sesión ya iniciada.
     try:
         WebDriverWait(driver, 20).until(
             lambda d: "login.empresas.pichincha.com" not in d.current_url
@@ -328,10 +301,6 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
             "un mensaje de error en pantalla — revisa manualmente."
         )
 
-    # Cierra cualquier modal bloqueante que pueda aparecer justo tras el
-    # login (el "¿Qué hay de nuevo?", diálogos de sesión, tour guiado...).
-    # Si no se cierra, la app puede interpretar la falta de interacción real
-    # como inactividad/comportamiento anómalo y cortar la sesión.
     LogManager.escribir_log("INFO", "Verificando y cerrando modales bloqueantes si aparecen...")
     cerrar_modales_bloqueantes(driver, timeout=15)
 
@@ -340,19 +309,14 @@ def login_pichincha(driver, usuario, password, id_ejecucion=0):
 
 
 if __name__ == "__main__":
-    # --- Datos de prueba: reemplaza por la lectura real de tus credenciales ---
-
-    # Leer credenciales del banco
     credenciales_banco = LectorArchivos.leerCSV(
         RUTAS_CONFIG['credenciales_banco'],
         filtro_columna=0,
         valor_filtro="Banco Pichincha"
     )
-
     USUARIO = credenciales_banco[0][1]
     PASSWORD = credenciales_banco[0][2]
 
-    # Carpeta local donde se van a guardar los CSVs descargados
     RUTA_DESCARGAS = os.path.join(os.getcwd(), "descargas_pichincha")
     os.makedirs(RUTA_DESCARGAS, exist_ok=True)
 
@@ -360,16 +324,8 @@ if __name__ == "__main__":
     try:
         login_pichincha(driver, USUARIO, PASSWORD, id_ejecucion=999)
         LogManager.escribir_log("SUCCESS", "Login OK. Iniciando descarga de movimientos de las 4 empresas...")
-
-        # Opción A: por API directa (recomendado — más rápido y estable,
-        # sin depender de selectores de UI que puedan cambiar).
         from download_by_api import descargar_todas_las_empresas_api
         descargar_todas_las_empresas_api(driver, RUTA_DESCARGAS)
-
-        # Opción B: clickeando la UI (respaldo si el endpoint cambia)
-        # from descargar_movimientos import descargar_todas_las_empresas
-        # descargar_todas_las_empresas(driver, RUTA_DESCARGAS)
-
         input("Proceso terminado. Presiona Enter para cerrar el navegador...")
     except Exception as e:
         LogManager.escribir_log("ERROR", f"Error: {e}")

@@ -91,14 +91,16 @@ def datosEjecucion(sql):
 
 def escribirLog(mensaje, id_ejecucion, estado, accion):
     """
-    Escribe un log en la BD (tabla AutomationLog). Se trunca a 400
-    caracteres porque el mensaje puede traer el stacktrace completo de
-    Selenium/Playwright (varias líneas largas), y la columna processName
-    no tiene espacio para eso — insertar sin truncar produce un error de
-    SQL Server ("datos truncados") que enmascara el error real.
+    Escribe un log en la BD (tabla AutomationLog). Se trunca de forma
+    conservadora: el error de SQL Server mostró un preview de 100
+    caracteres al truncar en 400, así que el límite real de la columna es
+    <= 100. Se deja en 80 con margen de seguridad hasta confirmar el ancho
+    exacto con:
+        SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME='AutomationLog' AND COLUMN_NAME='processName';
     """
     mensaje_una_linea = " ".join(mensaje.split())
-    mensaje_truncado = mensaje_una_linea[:400]
+    mensaje_truncado = mensaje_una_linea[:80]
     texto_limpio = mensaje_truncado.replace("'", "''")
     sql = f"""
         INSERT INTO {DATABASE_LOGS} (idAutomationRun, processName, dateLog, statusLog, action)

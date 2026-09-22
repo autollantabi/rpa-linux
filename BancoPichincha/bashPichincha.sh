@@ -6,20 +6,23 @@
 # puede ser detectado más fácil.
 
 # Configurar variables de entorno para headless
-export DISPLAY=:99
+# DISPLAY propio (:97): cada bash*.sh de banco corre su propio Xvfb en un
+# número distinto para no matarse el display entre sí si corren solapados
+# (cada uno mata "su" Xvfb al salir) — Bolivariano usa :98, este usa :97.
+export DISPLAY=:97
 export XVFB_WHD=${XVFB_WHD:-1920x1080x24}
 
 # Función para verificar si xvfb está corriendo
 check_xvfb() {
-    if pgrep -f "Xvfb :99" > /dev/null; then
-        echo "✅ Xvfb ya está corriendo en :99"
+    if pgrep -f "Xvfb :97" > /dev/null; then
+        echo "✅ Xvfb ya está corriendo en :97"
         return 0
     else
-        echo "🚀 Iniciando Xvfb en :99"
-        Xvfb :99 -screen 0 $XVFB_WHD -ac +extension GLX +render -noreset -dpi 96 2>/dev/null &
+        echo "🚀 Iniciando Xvfb en :97"
+        Xvfb :97 -screen 0 $XVFB_WHD -ac +extension GLX +render -noreset -dpi 96 2>/dev/null &
         sleep 3
 
-        if pgrep -f "Xvfb :99" > /dev/null; then
+        if pgrep -f "Xvfb :97" > /dev/null; then
             echo "✅ Xvfb iniciado correctamente"
             return 0
         else
@@ -32,7 +35,7 @@ check_xvfb() {
 # Función de limpieza
 cleanup() {
     echo "🧹 Limpiando procesos..."
-    pkill -f "Xvfb :99" 2>/dev/null
+    pkill -f "Xvfb :97" 2>/dev/null
     pkill -f "python.*session.py" 2>/dev/null
 }
 trap cleanup EXIT

@@ -1,21 +1,24 @@
 #!/bin/bash
 
 # Configurar variables de entorno para headless
-export DISPLAY=:99
+# DISPLAY propio (:96): cada bash*.sh de banco corre su propio Xvfb en un
+# número distinto para no matarse el display entre sí si corren solapados
+# (cada uno mata "su" Xvfb al salir).
+export DISPLAY=:96
 export XVFB_WHD=${XVFB_WHD:-1920x1080x24}
 
 # Función para verificar si xvfb está corriendo
 check_xvfb() {
-    if pgrep -f "Xvfb :99" > /dev/null; then
-        echo "✅ Xvfb ya está corriendo en :99"
+    if pgrep -f "Xvfb :96" > /dev/null; then
+        echo "✅ Xvfb ya está corriendo en :96"
         return 0
     else
-        echo "🚀 Iniciando Xvfb en :99"
+        echo "🚀 Iniciando Xvfb en :96"
         # Configuración mejorada para Xvfb
-        Xvfb :99 -screen 0 $XVFB_WHD -ac +extension GLX +render -noreset -dpi 96 2>/dev/null &
+        Xvfb :96 -screen 0 $XVFB_WHD -ac +extension GLX +render -noreset -dpi 96 2>/dev/null &
         sleep 3
-        
-        if pgrep -f "Xvfb :99" > /dev/null; then
+
+        if pgrep -f "Xvfb :96" > /dev/null; then
             echo "✅ Xvfb iniciado correctamente"
             return 0
         else
@@ -28,7 +31,7 @@ check_xvfb() {
 # Función de limpieza
 cleanup() {
     echo "🧹 Limpiando procesos..."
-    pkill -f "Xvfb :99" 2>/dev/null
+    pkill -f "Xvfb :96" 2>/dev/null
     pkill -f "python.*CooperativaCREA" 2>/dev/null
 }
 
